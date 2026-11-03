@@ -1,0 +1,19 @@
+{
+    "logs": [
+        {
+            "outputFile": "com.bhumivera.scanner.app-mergeDebugResources-57:/values-v30/values-v30.xml",
+            "map": [
+                {
+                    "source": "C:\\Users\\akash\\.gradle\\caches\\8.13\\transforms\\ea1c5743e92fd5858a050d4f0f407c9e\\transformed\\material3-release\\res\\values-v30\\values-v30.xml",
+                    "from": {
+                        "startLines": "2",
+                        "startColumns": "4",
+                        "startOffsets": "55",
+                        "endColumns": "72",
+                        "endOffsets": "123"
+                    }
+                }
+            ]
+        }
+    ]
+}

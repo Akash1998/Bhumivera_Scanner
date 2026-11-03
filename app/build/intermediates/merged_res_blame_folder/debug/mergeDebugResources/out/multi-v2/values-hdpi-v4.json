@@ -1,0 +1,20 @@
+{
+    "logs": [
+        {
+            "outputFile": "com.bhumivera.scanner.app-mergeDebugResources-57:/values-hdpi-v4/values-hdpi-v4.xml",
+            "map": [
+                {
+                    "source": "C:\\Users\\akash\\.gradle\\caches\\8.13\\transforms\\65640ec2b6ed3c33628b12ce21a5e455\\transformed\\appcompat-1.7.1\\res\\values-hdpi-v4\\values-hdpi-v4.xml",
+                    "from": {
+                        "startLines": "2",
+                        "startColumns": "4",
+                        "startOffsets": "55",
+                        "endLines": "6",
+                        "endColumns": "13",
+                        "endOffsets": "327"
+                    }
+                }
+            ]
+        }
+    ]
+}

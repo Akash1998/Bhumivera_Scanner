@@ -1,0 +1,247 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<incidents format="6" by="lint 8.13.0" type="incidents">
+
+    <incident
+        id="OldTargetApi"
+        severity="warning"
+        message="Not targeting the latest versions of Android; compatibility modes apply. Consider testing and updating this version. Consult the `android.os.Build.VERSION_CODES` javadoc for details.">
+        <fix-replace
+            description="Update targetSdkVersion to 37"
+            oldString="36"
+            replacement="37"
+            priority="0"/>
+        <location
+            file="${:app*projectDir}/build.gradle.kts"
+            line="22"
+            column="9"
+            startOffset="722"
+            endLine="22"
+            endColumn="23"
+            endOffset="736"/>
+    </incident>
+
+    <incident
+        id="GradleDependency"
+        severity="warning"
+        message="A newer version of androidx.activity:activity-compose than 1.10.1 is available: 1.13.0">
+        <fix-replace
+            description="Change to 1.13.0"
+            family="Update versions"
+            oldString="1.10.1"
+            replacement="1.13.0"
+            priority="0"/>
+        <location
+            file="${:app*projectDir}/build.gradle.kts"
+            line="50"
+            column="20"
+            startOffset="1485"
+            endLine="50"
+            endColumn="63"
+            endOffset="1528"/>
+    </incident>
+
+    <incident
+        id="GradleDependency"
+        severity="warning"
+        message="A newer version of androidx.navigation:navigation-compose than 2.9.4 is available: 2.10.2">
+        <fix-replace
+            description="Change to 2.10.2"
+            family="Update versions"
+            oldString="2.9.4"
+            replacement="2.10.2"
+            priority="0"/>
+        <location
+            file="${:app*projectDir}/build.gradle.kts"
+            line="57"
+            column="20"
+            startOffset="1916"
+            endLine="57"
+            endColumn="66"
+            endOffset="1962"/>
+    </incident>
+
+    <incident
+        id="GradleDependency"
+        severity="warning"
+        message="A newer version of androidx.security:security-crypto than 1.1.0-alpha06 is available: 1.1.0">
+        <fix-replace
+            description="Change to 1.1.0"
+            family="Update versions"
+            oldString="1.1.0-alpha06"
+            replacement="1.1.0"
+            priority="0"/>
+        <location
+            file="${:app*projectDir}/build.gradle.kts"
+            line="58"
+            column="20"
+            startOffset="1983"
+            endLine="58"
+            endColumn="69"
+            endOffset="2032"/>
+    </incident>
+
+    <incident
+        id="GradleDependency"
+        severity="warning"
+        message="A newer version of com.google.android.libraries.identity.googleid:googleid than 1.1.1 is available: 1.2.1">
+        <fix-replace
+            description="Change to 1.2.1"
+            family="Update versions"
+            oldString="1.1.1"
+            replacement="1.2.1"
+            priority="0"/>
+        <location
+            file="${:app*projectDir}/build.gradle.kts"
+            line="65"
+            column="20"
+            startOffset="2416"
+            endLine="65"
+            endColumn="83"
+            endOffset="2479"/>
+    </incident>
+
+    <incident
+        id="NewerVersionAvailable"
+        severity="warning"
+        message="A newer version of io.coil-kt.coil3:coil-compose than 3.3.0 is available: 3.6.3">
+        <fix-replace
+            description="Change to 3.6.3"
+            family="Update versions"
+            oldString="3.3.0"
+            replacement="3.6.3"
+            priority="0"/>
+        <location
+            file="${:app*projectDir}/build.gradle.kts"
+            line="59"
+            column="20"
+            startOffset="2053"
+            endLine="59"
+            endColumn="57"
+            endOffset="2090"/>
+    </incident>
+
+    <incident
+        id="NewerVersionAvailable"
+        severity="warning"
+        message="A newer version of io.coil-kt.coil3:coil-network-okhttp than 3.3.0 is available: 3.6.3">
+        <fix-replace
+            description="Change to 3.6.3"
+            family="Update versions"
+            oldString="3.3.0"
+            replacement="3.6.3"
+            priority="0"/>
+        <location
+            file="${:app*projectDir}/build.gradle.kts"
+            line="60"
+            column="20"
+            startOffset="2111"
+            endLine="60"
+            endColumn="64"
+            endOffset="2155"/>
+    </incident>
+
+    <incident
+        id="NewerVersionAvailable"
+        severity="warning"
+        message="A newer version of com.squareup.retrofit2:retrofit than 2.11.0 is available: 3.0.0">
+        <fix-replace
+            description="Change to 3.0.0"
+            family="Update versions"
+            oldString="2.11.0"
+            replacement="3.0.0"
+            priority="0"/>
+        <location
+            file="${:app*projectDir}/build.gradle.kts"
+            line="61"
+            column="20"
+            startOffset="2176"
+            endLine="61"
+            endColumn="60"
+            endOffset="2216"/>
+    </incident>
+
+    <incident
+        id="NewerVersionAvailable"
+        severity="warning"
+        message="A newer version of com.squareup.retrofit2:converter-gson than 2.11.0 is available: 3.0.0">
+        <fix-replace
+            description="Change to 3.0.0"
+            family="Update versions"
+            oldString="2.11.0"
+            replacement="3.0.0"
+            priority="0"/>
+        <location
+            file="${:app*projectDir}/build.gradle.kts"
+            line="62"
+            column="20"
+            startOffset="2237"
+            endLine="62"
+            endColumn="66"
+            endOffset="2283"/>
+    </incident>
+
+    <incident
+        id="NewerVersionAvailable"
+        severity="warning"
+        message="A newer version of com.squareup.okhttp3:okhttp than 4.12.0 is available: 5.5.1">
+        <fix-replace
+            description="Change to 5.5.1"
+            family="Update versions"
+            oldString="4.12.0"
+            replacement="5.5.1"
+            priority="0"/>
+        <location
+            file="${:app*projectDir}/build.gradle.kts"
+            line="63"
+            column="20"
+            startOffset="2304"
+            endLine="63"
+            endColumn="56"
+            endOffset="2340"/>
+    </incident>
+
+    <incident
+        id="NewerVersionAvailable"
+        severity="warning"
+        message="A newer version of com.google.code.gson:gson than 2.11.0 is available: 2.15.0">
+        <fix-replace
+            description="Change to 2.15.0"
+            family="Update versions"
+            oldString="2.11.0"
+            replacement="2.15.0"
+            priority="0"/>
+        <location
+            file="${:app*projectDir}/build.gradle.kts"
+            line="64"
+            column="20"
+            startOffset="2361"
+            endLine="64"
+            endColumn="54"
+            endOffset="2395"/>
+    </incident>
+
+    <incident
+        id="AutoboxingStateCreation"
+        severity="informational"
+        message="Prefer `mutableDoubleStateOf` instead of `mutableStateOf`">
+        <fix-replace
+            description="Replace with mutableDoubleStateOf"
+            replacement="androidx.compose.runtime.mutableDoubleStateOf"
+            shortenNames="true"
+            priority="0">
+            <range
+                file="${:app*debug*MAIN*sourceProvider*0*javaDir*0}/com/bhumivera/app/ui/BhumiveraApp.kt"
+                startOffset="24377"
+                endOffset="24391"/>
+        </fix-replace>
+        <location
+            file="${:app*debug*MAIN*sourceProvider*0*javaDir*0}/com/bhumivera/app/ui/BhumiveraApp.kt"
+            line="569"
+            column="29"
+            startOffset="24377"
+            endLine="569"
+            endColumn="43"
+            endOffset="24391"/>
+    </incident>
+
+</incidents>

@@ -1,0 +1,90 @@
+C:\Users\akash\OneDrive\Documents\GitHub\Bhumivera_Frontend\android-native\app\build.gradle.kts:22: Warning: Not targeting the latest versions of Android; compatibility modes apply. Consider testing and updating this version. Consult the android.os.Build.VERSION_CODES javadoc for details. [OldTargetApi]
+        targetSdk = 36
+        ~~~~~~~~~~~~~~
+
+   Explanation for issues of type "OldTargetApi":
+   When your application or sdk runs on a version of Android that is more
+   recent than your targetSdkVersion specifies that it has been tested with,
+   various compatibility modes kick in. This ensures that your application
+   continues to work, but it may look out of place. For example, if the
+   targetSdkVersion is less than 14, your app may get an option button in the
+   UI.
+
+   To fix this issue, set the targetSdkVersion to the highest available value.
+   Then test your app to make sure everything works correctly. You may want to
+   consult the compatibility notes to see what changes apply to each version
+   you are adding support for:
+   https://developer.android.com/reference/android/os/Build.VERSION_CODES.html
+   as well as follow this guide:
+   https://developer.android.com/distribute/best-practices/develop/target-sdk.
+   html
+
+   https://developer.android.com/distribute/best-practices/develop/target-sdk.html
+
+C:\Users\akash\OneDrive\Documents\GitHub\Bhumivera_Frontend\android-native\app\build.gradle.kts:50: Warning: A newer version of androidx.activity:activity-compose than 1.10.1 is available: 1.13.0 [GradleDependency]
+    implementation("androidx.activity:activity-compose:1.10.1")
+                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+C:\Users\akash\OneDrive\Documents\GitHub\Bhumivera_Frontend\android-native\app\build.gradle.kts:57: Warning: A newer version of androidx.navigation:navigation-compose than 2.9.4 is available: 2.10.2 [GradleDependency]
+    implementation("androidx.navigation:navigation-compose:2.9.4")
+                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+C:\Users\akash\OneDrive\Documents\GitHub\Bhumivera_Frontend\android-native\app\build.gradle.kts:58: Warning: A newer version of androidx.security:security-crypto than 1.1.0-alpha06 is available: 1.1.0 [GradleDependency]
+    implementation("androidx.security:security-crypto:1.1.0-alpha06")
+                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+C:\Users\akash\OneDrive\Documents\GitHub\Bhumivera_Frontend\android-native\app\build.gradle.kts:65: Warning: A newer version of com.google.android.libraries.identity.googleid:googleid than 1.1.1 is available: 1.2.1 [GradleDependency]
+    implementation("com.google.android.libraries.identity.googleid:googleid:1.1.1")
+                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+   Explanation for issues of type "GradleDependency":
+   This detector looks for usages of libraries where the version you are using
+   is not the current stable release. Using older versions is fine, and there
+   are cases where you deliberately want to stick with an older version.
+   However, you may simply not be aware that a more recent version is
+   available, and that is what this lint check helps find.
+
+C:\Users\akash\OneDrive\Documents\GitHub\Bhumivera_Frontend\android-native\app\build.gradle.kts:59: Warning: A newer version of io.coil-kt.coil3:coil-compose than 3.3.0 is available: 3.6.3 [NewerVersionAvailable]
+    implementation("io.coil-kt.coil3:coil-compose:3.3.0")
+                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+C:\Users\akash\OneDrive\Documents\GitHub\Bhumivera_Frontend\android-native\app\build.gradle.kts:60: Warning: A newer version of io.coil-kt.coil3:coil-network-okhttp than 3.3.0 is available: 3.6.3 [NewerVersionAvailable]
+    implementation("io.coil-kt.coil3:coil-network-okhttp:3.3.0")
+                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+C:\Users\akash\OneDrive\Documents\GitHub\Bhumivera_Frontend\android-native\app\build.gradle.kts:61: Warning: A newer version of com.squareup.retrofit2:retrofit than 2.11.0 is available: 3.0.0 [NewerVersionAvailable]
+    implementation("com.squareup.retrofit2:retrofit:2.11.0")
+                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+C:\Users\akash\OneDrive\Documents\GitHub\Bhumivera_Frontend\android-native\app\build.gradle.kts:62: Warning: A newer version of com.squareup.retrofit2:converter-gson than 2.11.0 is available: 3.0.0 [NewerVersionAvailable]
+    implementation("com.squareup.retrofit2:converter-gson:2.11.0")
+                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+C:\Users\akash\OneDrive\Documents\GitHub\Bhumivera_Frontend\android-native\app\build.gradle.kts:63: Warning: A newer version of com.squareup.okhttp3:okhttp than 4.12.0 is available: 5.5.1 [NewerVersionAvailable]
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+C:\Users\akash\OneDrive\Documents\GitHub\Bhumivera_Frontend\android-native\app\build.gradle.kts:64: Warning: A newer version of com.google.code.gson:gson than 2.11.0 is available: 2.15.0 [NewerVersionAvailable]
+    implementation("com.google.code.gson:gson:2.11.0")
+                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+   Explanation for issues of type "NewerVersionAvailable":
+   This detector checks with a central repository to see if there are newer
+   versions available for the dependencies used by this project. This is
+   similar to the GradleDependency check, which checks for newer versions
+   available in the Android SDK tools and libraries, but this works with any
+   MavenCentral dependency, and connects to the library every time, which
+   makes it more flexible but also much slower.
+
+C:\Users\akash\OneDrive\Documents\GitHub\Bhumivera_Frontend\android-native\app\src\main\java\com\bhumivera\app\ui\BhumiveraApp.kt:569: Hint: Prefer mutableDoubleStateOf instead of mutableStateOf [AutoboxingStateCreation from androidx.compose.runtime]
+    var total by remember { mutableStateOf(0.0) }
+                            ~~~~~~~~~~~~~~
+
+   Explanation for issues of type "AutoboxingStateCreation":
+   Calling mutableStateOf<T>() when T is either backed by a primitive type on
+   the JVM or is a value class results in a state implementation that requires
+   all state values to be boxed. This usually causes an additional allocation
+   for each state write, and adds some additional work to auto-unbox values
+   when reading the value of the state. Instead, prefer to use a specialized
+   primitive state implementation for Int, Long, Float, and Double when the
+   state does not need to track null values and does not override the default
+   SnapshotMutationPolicy. See mutableIntStateOf(), mutableLongStateOf(),
+   mutableFloatStateOf(), and mutableDoubleStateOf() for more information.
+
+   Vendor: Jetpack Compose
+   Identifier: androidx.compose.runtime
+   Feedback: https://issuetracker.google.com/issues/new?component=612128
+
+0 errors, 11 warnings, 1 hint

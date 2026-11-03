@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<incidents format="6" by="lint 8.13.0" type="partial_results">
+    <map id="CredentialManagerMisuse">
+            <map id="GET_CREDENTIAL_CALLS">
+                <location id="0"
+                    file="${:app*debug*MAIN*sourceProvider*0*javaDir*0}/com/bhumivera/app/ui/BhumiveraApp.kt"
+                    line="373"
+                    column="20"
+                    startOffset="16008"
+                    endLine="376"
+                    endColumn="6"
+                    endOffset="16118"/>
+            </map>
+        <entry
+            name="SAW_NO_CREDENTIAL_EXCEPTION"
+            boolean="true"/>
+    </map>
+    <map id="CredentialManagerSignInWithGoogle">
+            <map id="OPTION_REFS">
+                <location id="0"
+                    file="${:app*debug*MAIN*sourceProvider*0*javaDir*0}/com/bhumivera/app/ui/BhumiveraApp.kt"
+                    line="365"
+                    column="18"
+                    startOffset="15679"
+                    endLine="365"
+                    endColumn="35"
+                    endOffset="15696"/>
+            </map>
+        <entry
+            name="SAW_CREATE_FROM"
+            boolean="true"/>
+    </map>
+    <map id="UnsafeIntentLaunch">
+            <map id="unprotected">
+                <entry
+                    name="com.bhumivera.app.MainActivity"
+                    boolean="true"/>
+            </map>
+    </map>
+    <map id="UnusedResources">
+        <entry
+            name="model"
+            string="mipmap[ic_launcher(U),ic_launcher_background(U),ic_launcher_foreground(U)],style[AppTheme(U)],xml[data_extraction_rules(U),backup_rules(U)];0^1^2;;;"/>
+    </map>
+
+</incidents>

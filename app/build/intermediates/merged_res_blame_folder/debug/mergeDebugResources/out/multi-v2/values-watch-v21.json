@@ -1,0 +1,20 @@
+{
+    "logs": [
+        {
+            "outputFile": "com.bhumivera.scanner.app-mergeDebugResources-57:/values-watch-v21/values-watch-v21.xml",
+            "map": [
+                {
+                    "source": "C:\\Users\\akash\\.gradle\\caches\\8.13\\transforms\\65640ec2b6ed3c33628b12ce21a5e455\\transformed\\appcompat-1.7.1\\res\\values-watch-v21\\values-watch-v21.xml",
+                    "from": {
+                        "startLines": "2,6,10",
+                        "startColumns": "4,4,4",
+                        "startOffsets": "55,271,499",
+                        "endLines": "5,9,13",
+                        "endColumns": "12,12,12",
+                        "endOffsets": "266,494,724"
+                    }
+                }
+            ]
+        }
+    ]
+}
