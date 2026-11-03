@@ -92,7 +92,7 @@ data class ScannerProduct(
     val category: String? = null,
     val mrp: Double? = null,
     val price: Double? = null,
-    @SerializedName("gst_rate") val gstRate: Double? = 18.0,
+    @SerializedName("gst_rate") val gstRate: Double? = 0.0,
     @SerializedName("gstRate") val gstRateAlt: Double? = null,
     @SerializedName("gst_hsn_code") val gstHsnCode: String? = "33049990",
     @SerializedName("gstHsnCode") val gstHsnCodeAlt: String? = null,
@@ -112,7 +112,7 @@ data class ScannerProduct(
     val displayPrice: Double get() = price ?: mrp ?: 0.0
     val displayMrp: Double get() = mrp ?: displayPrice
     val displayStock: Int get() = availableStock ?: availableStockAlt ?: 0
-    val displayGstRate: Double get() = gstRate ?: gstRateAlt ?: 18.0
+    val displayGstRate: Double get() = gstRate ?: gstRateAlt ?: 0.0
     val displayHsn: String get() = gstHsnCode ?: gstHsnCodeAlt ?: "33049990"
     val displayBin: String get() = binCode ?: binCodeAlt ?: "ASN-SHOP-R1-B01"
     val displayBatch: String get() = batchNo ?: batchNoAlt ?: "BV-BATCH-2026"
@@ -162,15 +162,15 @@ data class PosBillItem(
     var quantity: Int,
     val price: Double,
     val mrp: Double,
-    val gstRate: Double = 18.0,
+    val gstRate: Double = 0.0,
     val gstHsnCode: String = "33049990",
     val binCode: String = "ASN-SHOP-R1-B01",
     val batchNo: String = "BV-BATCH-2026",
     val availableStock: Int = 0,
 ) {
     val lineSubtotal: Double get() = price * quantity
-    val lineTaxAmount: Double get() = Math.round(lineSubtotal * (gstRate / 100.0) * 100.0) / 100.0
-    val lineTotal: Double get() = lineSubtotal + lineTaxAmount
+    val lineTaxAmount: Double get() = 0.0
+    val lineTotal: Double get() = lineSubtotal
 }
 
 data class PosCustomer(
@@ -184,7 +184,7 @@ data class PosCheckoutRequest(
     val items: List<Map<String, Any>>,
     val extraCharges: List<Map<String, Any>> = emptyList(),
     val discount: Double = 0.0,
-    val taxRate: Double = 18.0,
+    val taxRate: Double = 0.0,
     val paidAmount: Double? = null,
     val paymentMode: String = "Cash",
     val upiReference: String = "",
@@ -204,10 +204,59 @@ data class PosSaleRecord(
     val date: String? = null,
     val subTotal: Double = 0.0,
     val tax: Double = 0.0,
-    val taxRate: Double = 18.0,
+    val taxRate: Double = 0.0,
     val billTotal: Double = 0.0,
     val paid: Double = 0.0,
     val paymentMode: String = "Cash",
     val cashier: String = "scanner",
     val cust: PosCustomer? = null,
+)
+
+data class ScannerQueueResponse(
+    val success: Boolean = false,
+    val message: String? = null,
+    val queue: List<ScannerQueueItem> = emptyList(),
+)
+
+data class ScannerQueueItem(
+    val id: Long? = null,
+    @SerializedName("session_code") val sessionCode: String? = null,
+    @SerializedName("meta_id") val metaId: Int? = null,
+    @SerializedName("product_id") val productId: Int? = null,
+    val sku: String = "",
+    val barcode: String? = null,
+    @SerializedName("product_name") val productName: String = "",
+    @SerializedName("unit_price") val unitPrice: Double = 0.0,
+    val mrp: Double = 0.0,
+    @SerializedName("gst_hsn_code") val gstHsnCode: String? = null,
+    @SerializedName("gst_rate") val gstRate: Double = 0.0,
+    val uom: String? = "Pcs",
+    val quantity: Int = 1,
+    @SerializedName("available_stock") val availableStock: Int = 0,
+    val status: String = "queued",
+)
+
+data class ScannerQueueItemRequest(
+    val sessionCode: String = "DEFAULT-POS-TERMINAL",
+    val sku: String? = null,
+    val metaId: Int? = null,
+    val quantity: Int? = null,
+    val delta: Int? = null,
+    val price: Double? = null,
+    val name: String? = null,
+    val availableStock: Int? = null,
+    val scannerApiKey: String? = null,
+)
+
+data class ScannerQueueRemoveRequest(
+    val sessionCode: String = "DEFAULT-POS-TERMINAL",
+    val sku: String? = null,
+    val id: Long? = null,
+    val metaId: Int? = null,
+    val scannerApiKey: String? = null,
+)
+
+data class ScannerQueueClearRequest(
+    val sessionCode: String = "DEFAULT-POS-TERMINAL",
+    val scannerApiKey: String? = null,
 )

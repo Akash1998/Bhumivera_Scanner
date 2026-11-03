@@ -84,11 +84,15 @@ import com.bhumivera.scanner.data.PosCustomer
 import com.bhumivera.scanner.data.PosSaleRecord
 import com.bhumivera.scanner.data.ScannerLookupRequest
 import com.bhumivera.scanner.data.ScannerProduct
+import com.bhumivera.scanner.data.ScannerQueueClearRequest
+import com.bhumivera.scanner.data.ScannerQueueItemRequest
+import com.bhumivera.scanner.data.ScannerQueueRemoveRequest
 import com.bhumivera.scanner.data.ScannerScanRequest
 import com.bhumivera.scanner.data.SessionStore
 import com.bhumivera.scanner.scanner.CameraScannerView
 import com.bhumivera.scanner.scanner.QrCodeGenerator
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.net.URLEncoder
@@ -186,6 +190,46 @@ fun ScannerScreen(
         }
     }
 
+    // REAL-TIME 2-WAY SYNC: Poll backend queue periodically to sync live cart with website
+    LaunchedEffect(sessionStore.sessionCode(), sessionStore.scannerApiKey()) {
+        while (true) {
+            try {
+                val qRes = service.scannerQueue(
+                    sessionCode = sessionStore.sessionCode(),
+                    apiKey = sessionStore.scannerApiKey()
+                )
+                if (qRes.success) {
+                    val qItems = qRes.queue
+                    val differs = qItems.size != posCart.size || qItems.any { q ->
+                        val local = posCart.find { it.sku == q.sku }
+                        local == null || local.quantity != q.quantity
+                    }
+                    if (differs) {
+                        posCart.clear()
+                        qItems.forEach { q ->
+                            posCart.add(
+                                PosBillItem(
+                                    id = q.metaId ?: 0,
+                                    productId = q.productId ?: 0,
+                                    name = q.productName,
+                                    sku = q.sku,
+                                    barcode = q.barcode ?: q.sku,
+                                    quantity = q.quantity,
+                                    price = q.unitPrice,
+                                    mrp = q.mrp,
+                                    gstRate = 0.0,
+                                    gstHsnCode = q.gstHsnCode ?: "33049990",
+                                    availableStock = q.availableStock
+                                )
+                            )
+                        }
+                    }
+                }
+            } catch (_: Exception) {}
+            delay(2000)
+        }
+    }
+
     // Helper to resolve scanned string (Pairing QR / URL / SKU / Barcode / Slug)
     fun processScannedRawText(rawText: String) {
         val clean = rawText.trim()
@@ -231,76 +275,89 @@ fun ScannerScreen(
         val matched = resolveFromLocalCache(clean, localLookupMap, localCatalog)
         if (matched != null) {
             triggerBeepAndHaptic(context)
-            activeScannedProduct = matched
-            scanQuantity = 1
-            statusMessage = "Resolved: " + matched.name
-
             if (sessionStore.isAutoAddMode()) {
                 addItemToPosCart(posCart, matched, 1)
-            }
-            scope.launch {
-                try {
-                    service.scannerScan(
-                        ScannerScanRequest(
-                            qrCode = matched.displaySku,
-                            quantity = 1,
-                            sessionCode = sessionStore.sessionCode(),
-                            scannerApiKey = sessionStore.scannerApiKey()
+                scope.launch {
+                    try {
+                        service.scannerQueueUpdateItem(
+                            ScannerQueueItemRequest(
+                                sessionCode = sessionStore.sessionCode(),
+                                sku = matched.displaySku,
+                                metaId = matched.displayMetaId,
+                                delta = 1,
+                                price = matched.displayPrice,
+                                name = matched.name,
+                                availableStock = matched.displayStock,
+                                scannerApiKey = sessionStore.scannerApiKey()
+                            )
                         )
-                    )
-                } catch (_: Exception) {}
+                    } catch (_: Exception) {}
+                }
+                statusMessage = "⚡ Auto-Added: ${matched.name}"
+                activeScannedProduct = null
+            } else {
+                activeScannedProduct = matched
+                scanQuantity = 1
+                statusMessage = "Scanned: ${matched.name}"
             }
             return
         }
 
-        // 3. LIVE CLOUD RESOLUTION VIA POST /scanner/scan (PROVEN ON RAILWAY)
+        // 3. LIVE CLOUD RESOLUTION
         scope.launch {
             isSearchingCode = true
-            statusMessage = "Scanning with Cloud API: " + clean + "..."
+            statusMessage = "Looking up: $clean..."
             try {
-                val scanReq = ScannerScanRequest(
-                    qrCode = clean,
-                    quantity = 1,
-                    sessionCode = sessionStore.sessionCode(),
-                    scannerApiKey = sessionStore.scannerApiKey()
+                val lookupRes = service.scannerLookup(
+                    ScannerLookupRequest(
+                        code = clean,
+                        scannerApiKey = sessionStore.scannerApiKey()
+                    )
                 )
-                val res = service.scannerScan(scanReq)
-                val product = res.scanned?.firstOrNull()
+                val product = lookupRes.item ?: extractSkuOrSlugFallback(clean, localCatalog)
                 if (product != null) {
                     triggerBeepAndHaptic(context)
-                    activeScannedProduct = product
-                    scanQuantity = 1
-                    statusMessage = "Scanned: " + product.name + " (Stock: " + product.displayStock + ")"
                     indexSingleProduct(product, localLookupMap)
                     if (sessionStore.isAutoAddMode()) {
                         addItemToPosCart(posCart, product, 1)
+                        try {
+                            service.scannerQueueUpdateItem(
+                                ScannerQueueItemRequest(
+                                    sessionCode = sessionStore.sessionCode(),
+                                    sku = product.displaySku,
+                                    metaId = product.displayMetaId,
+                                    delta = 1,
+                                    price = product.displayPrice,
+                                    name = product.name,
+                                    availableStock = product.displayStock,
+                                    scannerApiKey = sessionStore.scannerApiKey()
+                                )
+                            )
+                        } catch (_: Exception) {}
+                        statusMessage = "⚡ Auto-Added: ${product.name}"
+                        activeScannedProduct = null
+                    } else {
+                        activeScannedProduct = product
+                        scanQuantity = 1
+                        statusMessage = "Scanned: ${product.name} (Stock: ${product.displayStock})"
                     }
                 } else {
-                    val fallback = extractSkuOrSlugFallback(clean, localCatalog)
-                    if (fallback != null) {
-                        triggerBeepAndHaptic(context)
-                        activeScannedProduct = fallback
-                        scanQuantity = 1
-                        statusMessage = "Matched: " + fallback.name
-                        if (sessionStore.isAutoAddMode()) {
-                            addItemToPosCart(posCart, fallback, 1)
-                        }
-                    } else {
-                        statusMessage = res.message ?: ("No product found matching '" + clean + "'")
-                    }
+                    statusMessage = lookupRes.message ?: "No product found matching '$clean'"
                 }
             } catch (e: Exception) {
                 val fallback = extractSkuOrSlugFallback(clean, localCatalog)
                 if (fallback != null) {
                     triggerBeepAndHaptic(context)
-                    activeScannedProduct = fallback
-                    scanQuantity = 1
-                    statusMessage = "Offline Match: " + fallback.name
                     if (sessionStore.isAutoAddMode()) {
                         addItemToPosCart(posCart, fallback, 1)
+                        activeScannedProduct = null
+                    } else {
+                        activeScannedProduct = fallback
+                        scanQuantity = 1
+                        statusMessage = "Offline Match: ${fallback.name}"
                     }
                 } else {
-                    statusMessage = "Scan error: " + e.message
+                    statusMessage = "Scan error: ${e.message}"
                 }
             } finally {
                 isSearchingCode = false
@@ -705,7 +762,7 @@ fun ScannerScreen(
                                             }
                                         }
                                         Text(
-                                            text = "GST ${product.displayGstRate.toInt()}% Included (HSN: ${product.displayHsn})",
+                                            text = "HSN: ${product.displayHsn} • Inclusive Price",
                                             color = Color.Gray,
                                             fontSize = 10.sp
                                         )
@@ -753,37 +810,36 @@ fun ScannerScreen(
                                             addItemToPosCart(posCart, product, scanQuantity)
                                             triggerBeepAndHaptic(context)
                                             statusMessage = "Added ${product.name} (×$scanQuantity) to E-Bill!"
-                                            activeScannedProduct = null
-                                        },
-                                        modifier = Modifier.weight(1.2f),
-                                        colors = ButtonDefaults.buttonColors(containerColor = GoldAccent)
-                                    ) {
-                                        Text("🛒 Add to E-Bill", color = DeepEmerald, fontWeight = FontWeight.Bold)
-                                    }
-
-                                    // Push to Desktop Terminal Queue
-                                    OutlinedButton(
-                                        onClick = {
                                             scope.launch {
                                                 try {
-                                                    val scanReq = ScannerScanRequest(
-                                                        qrCode = product.displaySku,
-                                                        quantity = scanQuantity,
-                                                        sessionCode = sessionStore.sessionCode(),
-                                                        scannerApiKey = sessionStore.scannerApiKey()
+                                                    service.scannerQueueUpdateItem(
+                                                        ScannerQueueItemRequest(
+                                                            sessionCode = sessionStore.sessionCode(),
+                                                            sku = product.displaySku,
+                                                            metaId = product.displayMetaId,
+                                                            quantity = scanQuantity,
+                                                            price = product.displayPrice,
+                                                            name = product.name,
+                                                            availableStock = product.displayStock,
+                                                            scannerApiKey = sessionStore.scannerApiKey()
+                                                        )
                                                     )
-                                                    val res = service.scannerScan(scanReq)
-                                                    statusMessage = res.message ?: "Synced to Desktop POS!"
-                                                    activeScannedProduct = null
-                                                } catch (e: Exception) {
-                                                    statusMessage = "Terminal sync failed: ${e.message}"
-                                                }
+                                                } catch (_: Exception) {}
                                             }
+                                            activeScannedProduct = null
                                         },
-                                        modifier = Modifier.weight(1f),
-                                        border = androidx.compose.foundation.BorderStroke(1.dp, GoldAccent)
+                                        modifier = Modifier.weight(1.3f),
+                                        colors = ButtonDefaults.buttonColors(containerColor = GoldAccent)
                                     ) {
-                                        Text("🔄 Desktop POS", color = GoldAccent, fontSize = 12.sp)
+                                        Text("🛒 Add to E-Bill ($scanQuantity)", color = DeepEmerald, fontWeight = FontWeight.Bold)
+                                    }
+
+                                    OutlinedButton(
+                                        onClick = { activeScannedProduct = null },
+                                        modifier = Modifier.weight(0.7f),
+                                        border = androidx.compose.foundation.BorderStroke(1.dp, Color.Gray)
+                                    ) {
+                                        Text("Cancel", color = Color.LightGray, fontSize = 12.sp)
                                     }
                                 }
                             }
@@ -903,7 +959,7 @@ fun ScannerScreen(
                                                 overflow = TextOverflow.Ellipsis
                                             )
                                             Text(
-                                                text = "₹${item.price.toInt()} × ${item.quantity} = ₹${item.lineTotal.toInt()} (GST 18%)",
+                                                text = "₹${item.price.toInt()} × ${item.quantity} = ₹${(item.price * item.quantity).toInt()}",
                                                 color = GoldAccent,
                                                 fontSize = 11.sp
                                             )
@@ -913,9 +969,36 @@ fun ScannerScreen(
                                             IconButton(
                                                 onClick = {
                                                     if (item.quantity > 1) {
-                                                        item.quantity--
+                                                        val newQty = item.quantity - 1
+                                                        val idx = posCart.indexOf(item)
+                                                        if (idx != -1) posCart[idx] = item.copy(quantity = newQty)
+                                                        scope.launch {
+                                                            try {
+                                                                service.scannerQueueUpdateItem(
+                                                                    ScannerQueueItemRequest(
+                                                                        sessionCode = sessionStore.sessionCode(),
+                                                                        sku = item.sku,
+                                                                        metaId = item.id,
+                                                                        delta = -1,
+                                                                        scannerApiKey = sessionStore.scannerApiKey()
+                                                                    )
+                                                                )
+                                                            } catch (_: Exception) {}
+                                                        }
                                                     } else {
                                                         posCart.remove(item)
+                                                        scope.launch {
+                                                            try {
+                                                                service.scannerQueueRemove(
+                                                                    ScannerQueueRemoveRequest(
+                                                                        sessionCode = sessionStore.sessionCode(),
+                                                                        sku = item.sku,
+                                                                        metaId = item.id,
+                                                                        scannerApiKey = sessionStore.scannerApiKey()
+                                                                    )
+                                                                )
+                                                            } catch (_: Exception) {}
+                                                        }
                                                     }
                                                 },
                                                 modifier = Modifier.size(30.dp)
@@ -929,13 +1012,44 @@ fun ScannerScreen(
                                                 fontSize = 14.sp
                                             )
                                             IconButton(
-                                                onClick = { item.quantity++ },
+                                                onClick = {
+                                                    val newQty = item.quantity + 1
+                                                    val idx = posCart.indexOf(item)
+                                                    if (idx != -1) posCart[idx] = item.copy(quantity = newQty)
+                                                    scope.launch {
+                                                        try {
+                                                            service.scannerQueueUpdateItem(
+                                                                ScannerQueueItemRequest(
+                                                                    sessionCode = sessionStore.sessionCode(),
+                                                                    sku = item.sku,
+                                                                    metaId = item.id,
+                                                                    delta = 1,
+                                                                    scannerApiKey = sessionStore.scannerApiKey()
+                                                                )
+                                                            )
+                                                        } catch (_: Exception) {}
+                                                    }
+                                                },
                                                 modifier = Modifier.size(30.dp)
                                             ) {
                                                 Text("+", color = Color.White, fontSize = 16.sp)
                                             }
                                             IconButton(
-                                                onClick = { posCart.remove(item) },
+                                                onClick = {
+                                                    posCart.remove(item)
+                                                    scope.launch {
+                                                        try {
+                                                            service.scannerQueueRemove(
+                                                                ScannerQueueRemoveRequest(
+                                                                    sessionCode = sessionStore.sessionCode(),
+                                                                    sku = item.sku,
+                                                                    metaId = item.id,
+                                                                    scannerApiKey = sessionStore.scannerApiKey()
+                                                                )
+                                                            )
+                                                        } catch (_: Exception) {}
+                                                    }
+                                                },
                                                 modifier = Modifier.size(30.dp)
                                             ) {
                                                 Text("🗑️", fontSize = 14.sp)
@@ -949,9 +1063,8 @@ fun ScannerScreen(
                         Spacer(modifier = Modifier.height(10.dp))
 
                         // Payment Mode & Bill Calculation
-                        val subTotal = posCart.sumOf { it.lineSubtotal }
-                        val gstTotal = posCart.sumOf { it.lineTaxAmount }
-                        val grandTotal = subTotal + gstTotal
+                        val subTotal = posCart.sumOf { it.price * it.quantity }
+                        val grandTotal = subTotal
 
                         Card(
                             modifier = Modifier.fillMaxWidth(),
@@ -963,15 +1076,8 @@ fun ScannerScreen(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.SpaceBetween
                                 ) {
-                                    Text("Subtotal (Taxable):", color = Color.Gray, fontSize = 12.sp)
+                                    Text("Subtotal:", color = Color.Gray, fontSize = 12.sp)
                                     Text("₹${"%.2f".format(subTotal)}", color = Color.White, fontSize = 12.sp)
-                                }
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween
-                                ) {
-                                    Text("GST 18% (CGST 9% + SGST 9%):", color = Color.Gray, fontSize = 12.sp)
-                                    Text("₹${"%.2f".format(gstTotal)}", color = Color.White, fontSize = 12.sp)
                                 }
                                 HorizontalDivider(
                                     modifier = Modifier.padding(vertical = 6.dp),
@@ -1081,7 +1187,7 @@ fun ScannerScreen(
                                                 gstin = customerGstin
                                             ),
                                             items = itemsList,
-                                            taxRate = 18.0,
+                                            taxRate = 0.0,
                                             paidAmount = grandTotal,
                                             paymentMode = paymentMode,
                                             scannerApiKey = sessionStore.scannerApiKey()
@@ -1495,9 +1601,10 @@ private fun seedDefaultLuxuryProducts(
 }
 
 private fun addItemToPosCart(cart: MutableList<PosBillItem>, product: ScannerProduct, quantity: Int) {
-    val existing = cart.firstOrNull { it.id == product.displayMetaId || it.sku == product.displaySku }
-    if (existing != null) {
-        existing.quantity += quantity
+    val idx = cart.indexOfFirst { it.id == product.displayMetaId || it.sku == product.displaySku }
+    if (idx != -1) {
+        val existing = cart[idx]
+        cart[idx] = existing.copy(quantity = existing.quantity + quantity)
     } else {
         cart.add(
             PosBillItem(
@@ -1509,7 +1616,7 @@ private fun addItemToPosCart(cart: MutableList<PosBillItem>, product: ScannerPro
                 quantity = quantity,
                 price = product.displayPrice,
                 mrp = product.displayMrp,
-                gstRate = product.displayGstRate,
+                gstRate = 0.0,
                 gstHsnCode = product.displayHsn,
                 binCode = product.displayBin,
                 batchNo = product.displayBatch,
@@ -1541,16 +1648,15 @@ private fun buildWhatsAppInvoiceText(invoice: PosSaleRecord): String {
 CIN: U20237WB2026PTC295842 | GSTIN: 19AAKCB2026A1Z5
 G.T. Road, Asansol, West Bengal - 713304
 
-*OFFICIAL GST TAX E-BILL RECEIPT*
+*OFFICIAL RETAIL E-BILL RECEIPT*
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
 📄 *Invoice #:* ${invoice.invoiceNo ?: "BV-POS-2026"}
 📅 *Date:* ${invoice.date ?: "03 Nov 2026"}
 👤 *Customer:* ${invoice.cust?.name ?: "Walk-in Patron"}
 💳 *Payment:* ${invoice.paymentMode} (Status: Paid)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
-💰 *Subtotal (Taxable):* ₹${invoice.subTotal.toInt()}
-📊 *GST 18%:* ₹${invoice.tax.toInt()}
-💎 *TOTAL PAID:* ₹${invoice.billTotal.toInt()}
+💰 *Subtotal:* ₹${invoice.subTotal.toInt()}
+💎 *TOTAL PAID:* ₹${invoice.billTotal.toInt()} (Tax Included / Nil)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
 🔍 *Verify Formulation Authenticity:*
 https://www.bhumivera.com/verify?inv=${invoice.invoiceNo}

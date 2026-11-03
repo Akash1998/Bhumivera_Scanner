@@ -67,6 +67,21 @@ interface BhumiveraService {
     @POST("inventory-software/scanner/scan")
     suspend fun scannerScan(@Body request: ScannerScanRequest): ScannerScanResponse
 
+    @GET("inventory-software/scanner/queue")
+    suspend fun scannerQueue(
+        @Query("sessionCode") sessionCode: String? = null,
+        @Query("scannerApiKey") apiKey: String? = null
+    ): ScannerQueueResponse
+
+    @POST("inventory-software/scanner/queue/item")
+    suspend fun scannerQueueUpdateItem(@Body request: ScannerQueueItemRequest): ScannerQueueResponse
+
+    @POST("inventory-software/scanner/queue/remove")
+    suspend fun scannerQueueRemove(@Body request: ScannerQueueRemoveRequest): ScannerQueueResponse
+
+    @POST("inventory-software/scanner/queue/clear")
+    suspend fun scannerQueueClear(@Body request: ScannerQueueClearRequest): ScannerQueueResponse
+
     @POST("inventory-software/pos/checkout")
     suspend fun posCheckout(@Body request: PosCheckoutRequest): PosCheckoutResponse
 

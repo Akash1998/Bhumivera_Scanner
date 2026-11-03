@@ -49,7 +49,7 @@ class SessionStore(context: Context) {
         preferences.edit(commit = true) { putString(SESSION_CODE_KEY, code.trim()) }
     }
 
-    fun isAutoAddMode(): Boolean = preferences.getBoolean(AUTO_ADD_KEY, true)
+    fun isAutoAddMode(): Boolean = preferences.getBoolean(AUTO_ADD_KEY, false)
 
     fun setAutoAddMode(enabled: Boolean) {
         preferences.edit(commit = true) { putBoolean(AUTO_ADD_KEY, enabled) }
