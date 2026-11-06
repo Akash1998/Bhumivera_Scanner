@@ -39,3 +39,12 @@
 ## 4. Mandatory Rule for Bots
 If you add or modify any Kotlin file or feature:
 YOU MUST document the change in this file, recording previous count vs new count (e.g. 10 -> 11 files), even if the user did not explicitly remind you.
+
+---
+
+## 5. Chronological State & Delta Log
+
+| Entry | Timestamp | AI Agent / Model | Target Files | Action | Count Delta | Summary of Changes |
+| :---: | :---: | :---: | :--- | :---: | :---: | :--- |
+| **#001** | `2026-11-03 17:15 IST` | Antigravity AI | Entire module | INITIALIZED | 0 -> 10 files | Baseline Scanner & POS APK created and memory initialized. |
+| **#002** | `2026-11-06 21:15 IST` | Antigravity AI | `data/Models.kt`, `ui/ScannerScreen.kt` | MODIFIED | 10 -> 10 files | Updated fallback `gstHsnCode` from `33049990` to manufacturer-assigned Ayurvedic `30049011` and `gstRate` from `0.0` to statutory `5.0%` across `ScannerProduct`, `PosBillItem`, and POS cart builder. |

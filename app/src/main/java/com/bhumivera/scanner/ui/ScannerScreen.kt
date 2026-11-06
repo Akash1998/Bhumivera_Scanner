@@ -217,8 +217,8 @@ fun ScannerScreen(
                                     quantity = q.quantity,
                                     price = q.unitPrice,
                                     mrp = q.mrp,
-                                    gstRate = 0.0,
-                                    gstHsnCode = q.gstHsnCode ?: "33049990",
+                                    gstRate = 5.0,
+                                    gstHsnCode = q.gstHsnCode ?: "30049011",
                                     availableStock = q.availableStock
                                 )
                             )
@@ -1616,7 +1616,7 @@ private fun addItemToPosCart(cart: MutableList<PosBillItem>, product: ScannerPro
                 quantity = quantity,
                 price = product.displayPrice,
                 mrp = product.displayMrp,
-                gstRate = 0.0,
+                gstRate = 5.0,
                 gstHsnCode = product.displayHsn,
                 binCode = product.displayBin,
                 batchNo = product.displayBatch,

@@ -92,9 +92,9 @@ data class ScannerProduct(
     val category: String? = null,
     val mrp: Double? = null,
     val price: Double? = null,
-    @SerializedName("gst_rate") val gstRate: Double? = 0.0,
+    @SerializedName("gst_rate") val gstRate: Double? = 5.0,
     @SerializedName("gstRate") val gstRateAlt: Double? = null,
-    @SerializedName("gst_hsn_code") val gstHsnCode: String? = "33049990",
+    @SerializedName("gst_hsn_code") val gstHsnCode: String? = "30049011",
     @SerializedName("gstHsnCode") val gstHsnCodeAlt: String? = null,
     @SerializedName("available_stock") val availableStock: Int? = null,
     @SerializedName("availableStock") val availableStockAlt: Int? = null,
@@ -112,8 +112,8 @@ data class ScannerProduct(
     val displayPrice: Double get() = price ?: mrp ?: 0.0
     val displayMrp: Double get() = mrp ?: displayPrice
     val displayStock: Int get() = availableStock ?: availableStockAlt ?: 0
-    val displayGstRate: Double get() = gstRate ?: gstRateAlt ?: 0.0
-    val displayHsn: String get() = gstHsnCode ?: gstHsnCodeAlt ?: "33049990"
+    val displayGstRate: Double get() = gstRate ?: gstRateAlt ?: 5.0
+    val displayHsn: String get() = gstHsnCode ?: gstHsnCodeAlt ?: "30049011"
     val displayBin: String get() = binCode ?: binCodeAlt ?: "ASN-SHOP-R1-B01"
     val displayBatch: String get() = batchNo ?: batchNoAlt ?: "BV-BATCH-2026"
     val displaySku: String get() = sku ?: "SKU-${displayMetaId}"
@@ -162,8 +162,8 @@ data class PosBillItem(
     var quantity: Int,
     val price: Double,
     val mrp: Double,
-    val gstRate: Double = 0.0,
-    val gstHsnCode: String = "33049990",
+    val gstRate: Double = 5.0,
+    val gstHsnCode: String = "30049011",
     val binCode: String = "ASN-SHOP-R1-B01",
     val batchNo: String = "BV-BATCH-2026",
     val availableStock: Int = 0,
