@@ -1,0 +1,6 @@
+# BHUMIVERA SCANNER — CURSOR RULES & BOT DIRECTIVES
+# 1. READ "CODEBASE_MEMORY.md" FIRST.
+# 2. CURRENT INVENTORY: 10 Kotlin Files (CameraX, ML Kit, POS billing, Dynamic UPI QR).
+# 3. CONTRACT: Interfaces with Bhumivera_Backend via x-scanner-api-key at /api/inventory-software/scanner/*.
+# 4. SELF-UPDATING RULE:
+#    Whenever you add or modify a Kotlin file or composable, document the change in CODEBASE_MEMORY.md.
