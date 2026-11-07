@@ -142,7 +142,7 @@ data class ScannerLookupResponse(
 data class ScannerScanRequest(
     val qrCode: String,
     val quantity: Int = 1,
-    val sessionCode: String = "DEFAULT-POS-TERMINAL",
+    val sessionCode: String = "",
     val deviceName: String = "Bhumivera Android Quick Scanner",
     val scannerApiKey: String? = null,
 )
@@ -173,6 +173,16 @@ data class PosBillItem(
     val lineTotal: Double get() = lineSubtotal
 }
 
+data class PosDraftOrder(
+    val id: String,
+    val title: String,
+    val customerName: String,
+    val customerPhone: String,
+    val paymentMode: String,
+    val items: List<PosBillItem>,
+    val savedAt: Long,
+)
+
 data class PosCustomer(
     val name: String = "Walk-in Retail Shopper",
     val phone: String = "-",
@@ -182,6 +192,7 @@ data class PosCustomer(
 data class PosCheckoutRequest(
     val customer: PosCustomer,
     val items: List<Map<String, Any>>,
+    val sessionCode: String = "",
     val extraCharges: List<Map<String, Any>> = emptyList(),
     val discount: Double = 0.0,
     val taxRate: Double = 0.0,
@@ -237,7 +248,7 @@ data class ScannerQueueItem(
 )
 
 data class ScannerQueueItemRequest(
-    val sessionCode: String = "DEFAULT-POS-TERMINAL",
+    val sessionCode: String = "",
     val sku: String? = null,
     val metaId: Int? = null,
     val quantity: Int? = null,
@@ -249,7 +260,7 @@ data class ScannerQueueItemRequest(
 )
 
 data class ScannerQueueRemoveRequest(
-    val sessionCode: String = "DEFAULT-POS-TERMINAL",
+    val sessionCode: String = "",
     val sku: String? = null,
     val id: Long? = null,
     val metaId: Int? = null,
@@ -257,7 +268,7 @@ data class ScannerQueueRemoveRequest(
 )
 
 data class ScannerQueueClearRequest(
-    val sessionCode: String = "DEFAULT-POS-TERMINAL",
+    val sessionCode: String = "",
     val scannerApiKey: String? = null,
 )
 
@@ -304,7 +315,7 @@ data class OrderManifestItem(
 data class VerifyPackRequest(
     val orderId: String,
     val barcode: String,
-    val sessionCode: String = "DEFAULT-POS-TERMINAL",
+    val sessionCode: String = "",
     val scannerApiKey: String? = null,
 )
 

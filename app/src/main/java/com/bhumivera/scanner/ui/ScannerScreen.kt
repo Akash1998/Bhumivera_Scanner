@@ -45,13 +45,13 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -82,6 +82,7 @@ import com.bhumivera.scanner.data.BhumiveraService
 import com.bhumivera.scanner.data.PosBillItem
 import com.bhumivera.scanner.data.PosCheckoutRequest
 import com.bhumivera.scanner.data.PosCustomer
+import com.bhumivera.scanner.data.PosDraftOrder
 import com.bhumivera.scanner.data.PosSaleRecord
 import com.bhumivera.scanner.data.ScannerLookupRequest
 import com.bhumivera.scanner.data.ScannerProduct
@@ -100,8 +101,10 @@ import kotlinx.coroutines.withContext
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
+import java.util.UUID
 
 // Luxury Brand Palette
 private val GoldAccent = Color(0xFFD4AF37)
@@ -136,6 +139,9 @@ fun ScannerScreen(
 
     // Navigation Tab: 0 = Scanner Viewfinder, 1 = Active E-Bill POS
     var selectedTab by remember { mutableIntStateOf(0) }
+    var isPaired by remember { mutableStateOf(sessionStore.isPaired()) }
+    var isApiConnected by remember { mutableStateOf(false) }
+    var connectionNotice by remember { mutableStateOf<String?>(null) }
 
     // 10x Intelligent In-Memory Catalog Cache
     val localCatalog = remember { mutableStateListOf<ScannerProduct>() }
@@ -171,6 +177,10 @@ fun ScannerScreen(
 
     // POS Cart & Billing State
     val posCart = remember { mutableStateListOf<PosBillItem>() }
+    val posDrafts = remember { mutableStateListOf<PosDraftOrder>() }
+    var draftStorageError by remember { mutableStateOf<String?>(null) }
+    var activeDraftId by remember { mutableStateOf<String?>(null) }
+    var hasLocalCartEdits by remember { mutableStateOf(false) }
     var customerName by remember { mutableStateOf("Walk-in Retail Shopper") }
     var customerPhone by remember { mutableStateOf("") }
     var customerGstin by remember { mutableStateOf("") }
@@ -202,11 +212,27 @@ fun ScannerScreen(
             permissionLauncher.launch(android.Manifest.permission.CAMERA)
         }
 
-        // 10x Turbo Catalog Prefetch & Seed
+        // Seed an offline catalog so local product labels remain readable while reconnecting.
         seedDefaultLuxuryProducts(localCatalog, localLookupMap)
+        try {
+            posDrafts.addAll(sessionStore.loadPosDrafts())
+        } catch (e: Exception) {
+            draftStorageError = "Saved drafts could not be loaded: ${e.message ?: "storage error"}"
+        }
+    }
+
+    LaunchedEffect(isPaired, sessionStore.scannerApiKey()) {
+        if (!isPaired) {
+            isApiConnected = false
+            statusMessage = "Pair this device with the POS station to start."
+            return@LaunchedEffect
+        }
         isCatalogLoading = true
         try {
             val response = service.scannerCatalog(sessionStore.scannerApiKey())
+            if (!response.success) {
+                throw IllegalStateException("The server did not confirm catalog sync.")
+            }
             if (response.success && response.items.isNotEmpty()) {
                 localCatalog.clear()
                 localCatalog.addAll(response.items)
@@ -216,15 +242,19 @@ fun ScannerScreen(
                 isCatalogSynced = true
                 statusMessage = "10x Turbo Ready • ${response.items.size} Formulations Cached"
             }
-        } catch (_: Exception) {
-            statusMessage = "Using Offline Local Catalog • 9 Formulations"
+            isApiConnected = true
+            connectionNotice = null
+        } catch (e: Exception) {
+            isApiConnected = false
+            connectionNotice = apiFailureMessage(e) ?: "Catalog sync failed: ${e.message ?: "network error"}"
         } finally {
             isCatalogLoading = false
         }
     }
 
-    // REAL-TIME 2-WAY SYNC: Poll backend queue periodically to sync live cart with website
-    LaunchedEffect(sessionStore.sessionCode(), sessionStore.scannerApiKey()) {
+    // Keep the paired desktop queue visible without replacing an in-progress or saved mobile bill.
+    LaunchedEffect(isPaired, sessionStore.sessionCode(), sessionStore.scannerApiKey()) {
+        if (!isPaired) return@LaunchedEffect
         while (true) {
             try {
                 val qRes = service.scannerQueue(
@@ -232,12 +262,15 @@ fun ScannerScreen(
                     apiKey = sessionStore.scannerApiKey()
                 )
                 if (qRes.success) {
+                    isApiConnected = true
+                    connectionNotice = null
                     val qItems = qRes.queue
-                    val differs = qItems.size != posCart.size || qItems.any { q ->
-                        val local = posCart.find { it.sku == q.sku }
-                        local == null || local.quantity != q.quantity
-                    }
-                    if (differs) {
+                    val differs = qItems.isNotEmpty() &&
+                        (qItems.size != posCart.size || qItems.any { q ->
+                            val local = posCart.find { it.sku == q.sku }
+                            local == null || local.quantity != q.quantity
+                        })
+                    if (differs && !hasLocalCartEdits && activeDraftId == null) {
                         posCart.clear()
                         qItems.forEach { q ->
                             posCart.add(
@@ -257,14 +290,47 @@ fun ScannerScreen(
                             )
                         }
                     }
+                } else {
+                    throw IllegalStateException(qRes.message ?: "The server did not confirm POS queue sync.")
                 }
-            } catch (_: Exception) {}
+            } catch (e: Exception) {
+                isApiConnected = false
+                connectionNotice = apiFailureMessage(e) ?: "POS connection lost: ${e.message ?: "network error"}"
+                if (sessionStore.isSessionExpired()) isPaired = false
+            }
             delay(2000)
+        }
+    }
+
+    fun ensurePaired(): Boolean {
+        if (sessionStore.isPaired()) {
+            isPaired = true
+            return true
+        }
+        isPaired = false
+        isApiConnected = false
+        connectionNotice = "Pair with the POS station QR before using fulfillment, finder, or checkout."
+        statusMessage = "Pairing required · scan the station QR"
+        return false
+    }
+
+    suspend fun updateTerminalQueue(request: ScannerQueueItemRequest) {
+        val response = service.scannerQueueUpdateItem(request)
+        if (!response.success) {
+            throw IllegalStateException(response.message ?: "The server did not confirm the POS queue update.")
+        }
+    }
+
+    suspend fun removeTerminalQueueItem(request: ScannerQueueRemoveRequest) {
+        val response = service.scannerQueueRemove(request)
+        if (!response.success) {
+            throw IllegalStateException(response.message ?: "The server did not confirm the POS queue removal.")
         }
     }
 
     // Function to load order manifest by order ID or token
     fun loadOrderManifest(orderIdOrCode: String) {
+        if (!ensurePaired()) return
         val raw = orderIdOrCode.trim()
             .removePrefix("ORD:")
             .removePrefix("ord:")
@@ -308,6 +374,7 @@ fun ScannerScreen(
 
     // High-Accuracy Item Verification against Active Order Manifest
     fun verifyPackingBarcode(scannedCode: String) {
+        if (!ensurePaired()) return
         val order = activeOrder
         if (order == null) {
             loadOrderManifest(scannedCode)
@@ -431,6 +498,7 @@ fun ScannerScreen(
 
     // Function to lookup lost or misplaced parcel by barcode or QR
     fun lookupPackage(packageCode: String) {
+        if (!ensurePaired()) return
         val clean = packageCode.trim()
         if (clean.isBlank()) return
         isSearchingPackage = true
@@ -450,7 +518,7 @@ fun ScannerScreen(
                 }
             } catch (e: Exception) {
                 triggerMismatchAlarmAndHaptic(context)
-                packageErrorNotice = "Package lookup failed: ${e.message}"
+                packageErrorNotice = apiFailureMessage(e) ?: "Package lookup failed: ${e.message ?: "network error"}"
             } finally {
                 isSearchingPackage = false
             }
@@ -497,19 +565,25 @@ fun ScannerScreen(
                     null
                 }
                 sessionStore.saveExpiresAt(parsedExpiry ?: pairedAt + SessionStore.TWELVE_HOURS_MILLIS)
+                isPaired = sessionStore.isPaired()
+                connectionNotice = "Pairing saved. Connecting to POS station ${sessionStore.sessionCode()}..."
                 scope.launch {
                     try {
                         val ping = BhumiveraService.create(sessionStore).scannerPing(sessionStore.scannerApiKey())
                         if (ping.success != true) {
                             throw IllegalStateException(ping.message ?: "The scanner API did not confirm the connection.")
                         }
+                        isApiConnected = true
+                        connectionNotice = null
                         triggerBeepAndHaptic(context)
-                        pairingSuccessMessage = "Successfully paired with Warehouse Dock Station and connected to the live API.\n\nStation: ${sessionStore.sessionCode()}\nConnection: Online\nSession: ${sessionStore.hoursRemaining()} hours remaining\nScanner API Key: ${sessionStore.scannerApiKey()}\n\nScan an order token (ORD:...) to load its live packing checklist."
+                        pairingSuccessMessage = "Successfully paired with Warehouse Dock Station and connected to the live API.\n\nStation: ${sessionStore.sessionCode()}\nConnection: Online\nSession: ${sessionStore.hoursRemaining()} hours remaining\n\nScan an order token (ORD:...) to load its live packing checklist."
                         showPairingSuccessDialog = true
                         statusMessage = "🟢 API Connected · Station ${sessionStore.sessionCode()}"
                     } catch (e: Exception) {
                         triggerMismatchAlarmAndHaptic(context)
                         val detail = apiFailureMessage(e) ?: e.message ?: "network error"
+                        isApiConnected = false
+                        connectionNotice = "Pairing saved, but the live API is not connected: $detail"
                         packingErrorAlert = "Pairing key saved, but the API connection test failed: $detail Check the dock QR and network, then scan the pairing QR again."
                         statusMessage = "🔴 Scanner key saved · API connection failed"
                         pairingSuccessMessage = "The pairing key was saved, but the live API connection test failed.\n\n$detail\n\nCheck the network and scan the current dock QR again."
@@ -530,23 +604,33 @@ fun ScannerScreen(
             val pairedAt = System.currentTimeMillis()
             sessionStore.savePairedAt(pairedAt)
             sessionStore.saveExpiresAt(pairedAt + SessionStore.TWELVE_HOURS_MILLIS)
+            isPaired = sessionStore.isPaired()
             scope.launch {
                 try {
                     val ping = BhumiveraService.create(sessionStore).scannerPing(clean)
                     if (ping.success != true) throw IllegalStateException(ping.message ?: "The scanner API did not confirm the connection.")
+                    isApiConnected = true
+                    connectionNotice = null
                     triggerBeepAndHaptic(context)
-                    pairingSuccessMessage = "Successfully paired and connected to the live API.\n\nScanner API Key: $clean\nStation: ${sessionStore.sessionCode()}\nSession: ${sessionStore.hoursRemaining()} hours remaining\nConnection: Online"
+                    pairingSuccessMessage = "Successfully paired and connected to the live API.\n\nStation: ${sessionStore.sessionCode()}\nConnection: Online\nSession: ${sessionStore.hoursRemaining()} hours remaining"
                     showPairingSuccessDialog = true
                     statusMessage = "🟢 API Connected · Station ${sessionStore.sessionCode()}"
                 } catch (e: Exception) {
                     triggerMismatchAlarmAndHaptic(context)
                     val detail = apiFailureMessage(e) ?: e.message ?: "network error"
+                    isApiConnected = false
+                    connectionNotice = "Pairing saved, but the live API is not connected: $detail"
                     packingErrorAlert = "Scanner key saved, but API connection failed: $detail."
                     statusMessage = "🔴 Scanner key saved · API connection failed"
                     pairingSuccessMessage = "The scanner key was saved, but the live API connection test failed.\n\n$detail"
                     showPairingSuccessDialog = true
                 }
             }
+            return
+        }
+
+        if (!ensurePaired()) {
+            triggerMismatchAlarmAndHaptic(context)
             return
         }
 
@@ -583,9 +667,10 @@ fun ScannerScreen(
             triggerBeepAndHaptic(context)
             if (sessionStore.isAutoAddMode()) {
                 addItemToPosCart(posCart, matched, 1)
+                hasLocalCartEdits = true
                 scope.launch {
                     try {
-                        service.scannerQueueUpdateItem(
+                        updateTerminalQueue(
                             ScannerQueueItemRequest(
                                 sessionCode = sessionStore.sessionCode(),
                                 sku = matched.displaySku,
@@ -597,7 +682,9 @@ fun ScannerScreen(
                                 scannerApiKey = sessionStore.scannerApiKey()
                             )
                         )
-                    } catch (_: Exception) {}
+                    } catch (e: Exception) {
+                        connectionNotice = apiFailureMessage(e) ?: "Product added to this bill, but POS sync failed: ${e.message ?: "network error"}"
+                    }
                 }
                 statusMessage = "⚡ Auto-Added: ${matched.name}"
                 activeScannedProduct = null
@@ -626,8 +713,9 @@ fun ScannerScreen(
                     indexSingleProduct(product, localLookupMap)
                     if (sessionStore.isAutoAddMode()) {
                         addItemToPosCart(posCart, product, 1)
+                        hasLocalCartEdits = true
                         try {
-                            service.scannerQueueUpdateItem(
+                            updateTerminalQueue(
                                 ScannerQueueItemRequest(
                                     sessionCode = sessionStore.sessionCode(),
                                     sku = product.displaySku,
@@ -639,7 +727,9 @@ fun ScannerScreen(
                                     scannerApiKey = sessionStore.scannerApiKey()
                                 )
                             )
-                        } catch (_: Exception) {}
+                        } catch (e: Exception) {
+                            connectionNotice = apiFailureMessage(e) ?: "Product added to this bill, but POS sync failed: ${e.message ?: "network error"}"
+                        }
                         statusMessage = "⚡ Auto-Added: ${product.name}"
                         activeScannedProduct = null
                     } else {
@@ -656,6 +746,7 @@ fun ScannerScreen(
                     triggerBeepAndHaptic(context)
                     if (sessionStore.isAutoAddMode()) {
                         addItemToPosCart(posCart, fallback, 1)
+                        hasLocalCartEdits = true
                         activeScannedProduct = null
                     } else {
                         activeScannedProduct = fallback
@@ -668,6 +759,64 @@ fun ScannerScreen(
             } finally {
                 isSearchingCode = false
             }
+        }
+    }
+
+    fun saveCurrentDraft() {
+        if (posCart.isEmpty()) {
+            statusMessage = "Scan products before saving a POS draft."
+            return
+        }
+        val savedAt = System.currentTimeMillis()
+        val title = if (customerName.isBlank() || customerName == "Walk-in Retail Shopper") {
+            "Walk-in · ${SimpleDateFormat("dd MMM, HH:mm", Locale.getDefault()).format(Date(savedAt))}"
+        } else {
+            customerName.trim()
+        }
+        val draft = PosDraftOrder(
+            id = activeDraftId ?: UUID.randomUUID().toString(),
+            title = title,
+            customerName = customerName,
+            customerPhone = customerPhone,
+            paymentMode = paymentMode,
+            items = posCart.toList(),
+            savedAt = savedAt,
+        )
+        val existingIndex = posDrafts.indexOfFirst { it.id == draft.id }
+        if (existingIndex >= 0) posDrafts.removeAt(existingIndex)
+        posDrafts.add(0, draft)
+        while (posDrafts.size > 30) posDrafts.removeAt(posDrafts.lastIndex)
+        try {
+            sessionStore.savePosDrafts(posDrafts.toList())
+            activeDraftId = draft.id
+            hasLocalCartEdits = true
+            draftStorageError = null
+            statusMessage = "Draft saved securely on this device. Resume it from Drafts."
+        } catch (e: Exception) {
+            draftStorageError = "Could not save this draft: ${e.message ?: "storage error"}"
+        }
+    }
+
+    fun resumePosDraft(draft: PosDraftOrder) {
+        posCart.clear()
+        posCart.addAll(draft.items)
+        customerName = draft.customerName
+        customerPhone = draft.customerPhone
+        paymentMode = draft.paymentMode
+        activeDraftId = draft.id
+        hasLocalCartEdits = true
+        selectedTab = 3
+        statusMessage = "Draft restored: ${draft.title}"
+    }
+
+    fun deletePosDraft(draft: PosDraftOrder) {
+        posDrafts.removeAll { it.id == draft.id }
+        if (activeDraftId == draft.id) activeDraftId = null
+        try {
+            sessionStore.savePosDrafts(posDrafts.toList())
+            draftStorageError = null
+        } catch (e: Exception) {
+            draftStorageError = "Could not delete the saved draft: ${e.message ?: "storage error"}"
         }
     }
 
@@ -690,7 +839,7 @@ fun ScannerScreen(
                                 shape = RoundedCornerShape(4.dp)
                             ) {
                                 Text(
-                                    text = "2.0 HIGH SPEED",
+                                    text = "FULFILLMENT",
                                     color = MintGreen,
                                     fontSize = 9.sp,
                                     fontWeight = FontWeight.Bold,
@@ -706,9 +855,10 @@ fun ScannerScreen(
                                     text = when {
                                         !sessionStore.isPaired() -> "Not paired"
                                         sessionStore.isSessionExpired() -> "Session expired"
-                                        else -> "${sessionStore.hoursRemaining()}h Left"
+                                        !isApiConnected -> "API offline"
+                                        else -> "${sessionStore.hoursRemaining()}h • Online"
                                     },
-                                    color = if (sessionStore.isSessionExpired() || !sessionStore.isPaired()) Color(0xFFFCA5A5) else Color(0xFF5EEAD4),
+                                    color = if (sessionStore.isSessionExpired() || !sessionStore.isPaired() || !isApiConnected) Color(0xFFFCA5A5) else Color(0xFF5EEAD4),
                                     fontSize = 9.sp,
                                     fontWeight = FontWeight.Bold,
                                     modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
@@ -725,7 +875,7 @@ fun ScannerScreen(
                     }
                 },
                 actions = {
-                    if (selectedTab == 0) {
+                    if (selectedTab in 0..2) {
                         // Torch Toggle
                         IconButton(onClick = { isTorchOn = !isTorchOn }) {
                             Text(
@@ -747,32 +897,41 @@ fun ScannerScreen(
             )
         },
         bottomBar = {
-            TabRow(
-                selectedTabIndex = selectedTab,
-                containerColor = DeepEmerald,
-                contentColor = GoldAccent
-            ) {
-                Tab(
+            NavigationBar(containerColor = DeepEmerald) {
+                NavigationBarItem(
                     selected = selectedTab == 0,
                     onClick = { selectedTab = 0 },
-                    text = {
-                        Text(
-                            text = "📷 Quick Scanner",
-                            fontWeight = if (selectedTab == 0) FontWeight.Bold else FontWeight.Normal
-                        )
-                    }
+                    icon = { Text("▦", fontSize = 18.sp) },
+                    label = { Text("Scan", fontSize = 10.sp) },
                 )
-                Tab(
+                NavigationBarItem(
                     selected = selectedTab == 1,
                     onClick = { selectedTab = 1 },
-                    text = {
+                    icon = { Text("□", fontSize = 18.sp) },
+                    label = { Text("Fulfill", fontSize = 10.sp) },
+                )
+                NavigationBarItem(
+                    selected = selectedTab == 2,
+                    onClick = { selectedTab = 2 },
+                    icon = { Text("⌕", fontSize = 18.sp) },
+                    label = { Text("Finder", fontSize = 10.sp) },
+                )
+                NavigationBarItem(
+                    selected = selectedTab == 3,
+                    onClick = { selectedTab = 3 },
+                    icon = { Text("₹", fontSize = 18.sp) },
+                    label = {
                         val cartCount = posCart.sumOf { it.quantity }
-                        val cartSum = posCart.sumOf { it.lineTotal }
-                        Text(
-                            text = if (cartCount > 0) "🧾 E-Bill ($cartCount • ₹${cartSum.toInt()})" else "🧾 E-Bill POS",
-                            fontWeight = if (selectedTab == 1) FontWeight.Bold else FontWeight.Normal
-                        )
-                    }
+                        Text(if (cartCount > 0) "POS $cartCount" else "POS", fontSize = 10.sp)
+                    },
+                )
+                NavigationBarItem(
+                    selected = selectedTab == 4,
+                    onClick = { selectedTab = 4 },
+                    icon = { Text("≡", fontSize = 18.sp) },
+                    label = {
+                        Text(if (posDrafts.isNotEmpty()) "Drafts ${posDrafts.size}" else "Drafts", fontSize = 10.sp)
+                    },
                 )
             }
         },
@@ -849,7 +1008,7 @@ fun ScannerScreen(
                                     .align(Alignment.BottomCenter)
                                     .padding(bottom = 12.dp, start = 16.dp, end = 16.dp)
                                     .fillMaxWidth()
-                                    .clickable { selectedTab = 1 },
+                                    .clickable { selectedTab = 3 },
                                 color = DeepEmerald,
                                 shape = RoundedCornerShape(14.dp),
                                 border = androidx.compose.foundation.BorderStroke(1.dp, GoldAccent.copy(alpha = 0.5f))
@@ -958,7 +1117,6 @@ fun ScannerScreen(
                             }
                         }
                     }
-                }
 
                 // SCANNED PRODUCT POPUP BOTTOM CARD
                 activeScannedProduct?.let { product ->
@@ -1131,11 +1289,12 @@ fun ScannerScreen(
                                     Button(
                                         onClick = {
                                             addItemToPosCart(posCart, product, scanQuantity)
+                                            hasLocalCartEdits = true
                                             triggerBeepAndHaptic(context)
                                             statusMessage = "Added ${product.name} (×$scanQuantity) to E-Bill!"
                                             scope.launch {
                                                 try {
-                                                    service.scannerQueueUpdateItem(
+                                                    updateTerminalQueue(
                                                         ScannerQueueItemRequest(
                                                             sessionCode = sessionStore.sessionCode(),
                                                             sku = product.displaySku,
@@ -1147,7 +1306,9 @@ fun ScannerScreen(
                                                             scannerApiKey = sessionStore.scannerApiKey()
                                                         )
                                                     )
-                                                } catch (_: Exception) {}
+                                                } catch (e: Exception) {
+                                                    connectionNotice = apiFailureMessage(e) ?: "Added to this bill, but terminal sync failed: ${e.message ?: "network error"}"
+                                                }
                                             }
                                             activeScannedProduct = null
                                         },
@@ -1169,6 +1330,7 @@ fun ScannerScreen(
                         }
                     }
                 }
+            }
             } else if (selectedTab == 1) {
                 // GUIDED ORDER PACKING STATION VIEW
                 Column(
@@ -1735,16 +1897,20 @@ fun ScannerScreen(
                                                 // Push notice to desktop
                                                 scope.launch {
                                                     try {
-                                                        service.scannerScan(
+                                                        val response = service.scannerScan(
                                                             com.bhumivera.scanner.data.ScannerScanRequest(
                                                                 sessionCode = sessionStore.sessionCode(),
                                                                 qrCode = pkg.packageId ?: "PKG:${pkg.orderId}",
                                                                 scannerApiKey = sessionStore.scannerApiKey()
                                                             )
                                                         )
+                                                        if (!response.success) {
+                                                            throw IllegalStateException(response.message ?: "The server did not confirm package sync.")
+                                                        }
                                                         packageDesktopSyncNotice = "Pushed Package ${pkg.packageId} to Warehouse Desktop Terminal (${sessionStore.sessionCode()})!"
                                                     } catch (e: Exception) {
-                                                        packageDesktopSyncNotice = "Sent signal to desktop."
+                                                        packageDesktopSyncNotice = apiFailureMessage(e)
+                                                            ?: "Could not sync package to desktop: ${e.message ?: "network error"}"
                                                     }
                                                 }
                                             },
@@ -1769,22 +1935,49 @@ fun ScannerScreen(
                         }
                     }
                 }
-            } else {
+            } else if (selectedTab == 3) {
                 // POS ACTIVE E-BILL & QUICK CHECKOUT TAB
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(16.dp)
                 ) {
-                    Text(
-                        text = "🧾 INSTANT E-BILL POS CHECKOUT",
-                        color = GoldAccent,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.ExtraBold,
-                        letterSpacing = 1.sp
-                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "RETAIL POS",
+                                color = GoldAccent,
+                                fontSize = 18.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                letterSpacing = 1.sp
+                            )
+                            Text("Connected terminal · ${sessionStore.sessionCode()}", color = Color.Gray, fontSize = 10.sp)
+                        }
+                        if (posCart.isNotEmpty()) {
+                            OutlinedButton(
+                                onClick = { saveCurrentDraft() },
+                                border = androidx.compose.foundation.BorderStroke(1.dp, GoldAccent),
+                                colors = ButtonDefaults.outlinedButtonColors(contentColor = GoldAccent),
+                            ) {
+                                Text(if (activeDraftId == null) "Save draft" else "Update draft", fontSize = 11.sp)
+                            }
+                        }
+                    }
 
                     Spacer(modifier = Modifier.height(10.dp))
+
+                    draftStorageError?.let { message ->
+                        Card(
+                            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                            colors = CardDefaults.cardColors(containerColor = Color(0xFF4A0E17)),
+                        ) {
+                            Text(message, color = Color.White, fontSize = 12.sp, modifier = Modifier.padding(10.dp))
+                        }
+                    }
 
                     if (posCart.isEmpty()) {
                         Box(
@@ -1895,9 +2088,10 @@ fun ScannerScreen(
                                                         val newQty = item.quantity - 1
                                                         val idx = posCart.indexOf(item)
                                                         if (idx != -1) posCart[idx] = item.copy(quantity = newQty)
+                                                        hasLocalCartEdits = true
                                                         scope.launch {
                                                             try {
-                                                                service.scannerQueueUpdateItem(
+                                                                updateTerminalQueue(
                                                                     ScannerQueueItemRequest(
                                                                         sessionCode = sessionStore.sessionCode(),
                                                                         sku = item.sku,
@@ -1906,13 +2100,17 @@ fun ScannerScreen(
                                                                         scannerApiKey = sessionStore.scannerApiKey()
                                                                     )
                                                                 )
-                                                            } catch (_: Exception) {}
+                                                            } catch (e: Exception) {
+                                                                connectionNotice = apiFailureMessage(e) ?: "Could not sync bill quantity: ${e.message ?: "network error"}"
+                                                                statusMessage = "Bill changed locally; terminal sync failed."
+                                                            }
                                                         }
                                                     } else {
                                                         posCart.remove(item)
+                                                        hasLocalCartEdits = true
                                                         scope.launch {
                                                             try {
-                                                                service.scannerQueueRemove(
+                                                                removeTerminalQueueItem(
                                                                     ScannerQueueRemoveRequest(
                                                                         sessionCode = sessionStore.sessionCode(),
                                                                         sku = item.sku,
@@ -1920,7 +2118,10 @@ fun ScannerScreen(
                                                                         scannerApiKey = sessionStore.scannerApiKey()
                                                                     )
                                                                 )
-                                                            } catch (_: Exception) {}
+                                                            } catch (e: Exception) {
+                                                                connectionNotice = apiFailureMessage(e) ?: "Could not remove bill item: ${e.message ?: "network error"}"
+                                                                statusMessage = "Item removed locally; terminal sync failed."
+                                                            }
                                                         }
                                                     }
                                                 },
@@ -1939,9 +2140,10 @@ fun ScannerScreen(
                                                     val newQty = item.quantity + 1
                                                     val idx = posCart.indexOf(item)
                                                     if (idx != -1) posCart[idx] = item.copy(quantity = newQty)
+                                                    hasLocalCartEdits = true
                                                     scope.launch {
                                                         try {
-                                                            service.scannerQueueUpdateItem(
+                                                            updateTerminalQueue(
                                                                 ScannerQueueItemRequest(
                                                                     sessionCode = sessionStore.sessionCode(),
                                                                     sku = item.sku,
@@ -1950,7 +2152,10 @@ fun ScannerScreen(
                                                                     scannerApiKey = sessionStore.scannerApiKey()
                                                                 )
                                                             )
-                                                        } catch (_: Exception) {}
+                                                        } catch (e: Exception) {
+                                                            connectionNotice = apiFailureMessage(e) ?: "Could not sync bill quantity: ${e.message ?: "network error"}"
+                                                            statusMessage = "Bill changed locally; terminal sync failed."
+                                                        }
                                                     }
                                                 },
                                                 modifier = Modifier.size(30.dp)
@@ -1960,9 +2165,10 @@ fun ScannerScreen(
                                             IconButton(
                                                 onClick = {
                                                     posCart.remove(item)
+                                                    hasLocalCartEdits = true
                                                     scope.launch {
                                                         try {
-                                                            service.scannerQueueRemove(
+                                                            removeTerminalQueueItem(
                                                                 ScannerQueueRemoveRequest(
                                                                     sessionCode = sessionStore.sessionCode(),
                                                                     sku = item.sku,
@@ -1970,7 +2176,10 @@ fun ScannerScreen(
                                                                     scannerApiKey = sessionStore.scannerApiKey()
                                                                 )
                                                             )
-                                                        } catch (_: Exception) {}
+                                                        } catch (e: Exception) {
+                                                            connectionNotice = apiFailureMessage(e) ?: "Could not remove bill item: ${e.message ?: "network error"}"
+                                                            statusMessage = "Item removed locally; terminal sync failed."
+                                                        }
                                                     }
                                                 },
                                                 modifier = Modifier.size(30.dp)
@@ -2110,6 +2319,7 @@ fun ScannerScreen(
                                                 gstin = customerGstin
                                             ),
                                             items = itemsList,
+                                            sessionCode = sessionStore.sessionCode(),
                                             taxRate = 0.0,
                                             paidAmount = grandTotal,
                                             paymentMode = paymentMode,
@@ -2120,11 +2330,26 @@ fun ScannerScreen(
                                             completedInvoice = resp.sale
                                             showInvoiceDialog = true
                                             posCart.clear()
+                                            val completedDraftId = activeDraftId
+                                            activeDraftId = null
+                                            hasLocalCartEdits = false
+                                            if (completedDraftId != null) {
+                                                posDrafts.removeAll { it.id == completedDraftId }
+                                                try {
+                                                    sessionStore.savePosDrafts(posDrafts.toList())
+                                                } catch (e: Exception) {
+                                                    draftStorageError = "Sale completed, but its saved draft could not be removed: ${e.message ?: "storage error"}"
+                                                }
+                                            }
+                                            connectionNotice = null
                                         } else {
                                             statusMessage = resp.message ?: "POS Checkout failed"
                                         }
                                     } catch (e: Exception) {
-                                        statusMessage = "Checkout error: ${e.message}"
+                                        val detail = apiFailureMessage(e) ?: e.message ?: "network error"
+                                        statusMessage = "Checkout failed: $detail"
+                                        connectionNotice = "Checkout not confirmed: $detail"
+                                        if (sessionStore.isSessionExpired()) isPaired = false
                                     } finally {
                                         isCheckingOut = false
                                     }
@@ -2133,6 +2358,7 @@ fun ScannerScreen(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(50.dp),
+                            enabled = !isCheckingOut && sessionStore.isPaired(),
                             colors = ButtonDefaults.buttonColors(containerColor = GoldAccent)
                         ) {
                             if (isCheckingOut) {
@@ -2148,9 +2374,46 @@ fun ScannerScreen(
                         }
                     }
                 }
+                } else {
+                    SavedPosDraftsScreen(
+                        drafts = posDrafts,
+                        storageError = draftStorageError,
+                        onOpenScanner = { selectedTab = 0 },
+                        onResume = { resumePosDraft(it) },
+                        onDelete = { deletePosDraft(it) },
+                    )
+                }
+                if (!isPaired || connectionNotice != null) {
+                    Surface(
+                        modifier = Modifier.align(Alignment.TopCenter).padding(10.dp),
+                        color = Color(0xFF4A0E17),
+                        shape = RoundedCornerShape(12.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFFCA5A5).copy(alpha = 0.6f)),
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                        ) {
+                            Text(
+                                connectionNotice ?: "Pair with the POS station QR to connect.",
+                                color = Color.White,
+                                fontSize = 11.sp,
+                                modifier = Modifier.weight(1f),
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            TextButton(onClick = {
+                                selectedTab = 0
+                                statusMessage = "Point the camera at the POS station pairing QR."
+                            }) {
+                                Text("Pair", color = GoldAccent, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                }
             }
         }
-    }
 
     // ==========================================
     // COMPLETED INVOICE & WHATSAPP E-BILL DIALOG
@@ -2354,6 +2617,99 @@ fun ScannerScreen(
             },
             containerColor = CardEmerald
         )
+    }
+}
+
+@Composable
+private fun SavedPosDraftsScreen(
+    drafts: List<PosDraftOrder>,
+    storageError: String?,
+    onOpenScanner: () -> Unit,
+    onResume: (PosDraftOrder) -> Unit,
+    onDelete: (PosDraftOrder) -> Unit,
+) {
+    Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+        Text("SAVED POS DRAFTS", color = GoldAccent, fontSize = 18.sp, fontWeight = FontWeight.ExtraBold)
+        Text("Stored securely on this device · up to 30 bills", color = Color.Gray, fontSize = 11.sp)
+        storageError?.let { message ->
+            Card(
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF4A0E17)),
+            ) {
+                Text(message, color = Color.White, fontSize = 12.sp, modifier = Modifier.padding(10.dp))
+            }
+        }
+        Spacer(modifier = Modifier.height(12.dp))
+        if (drafts.isEmpty()) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("No saved bills", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text("Add products in Scan, then save the POS bill as a draft.", color = Color.Gray, fontSize = 12.sp, textAlign = TextAlign.Center)
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Button(onClick = onOpenScanner, colors = ButtonDefaults.buttonColors(containerColor = GoldAccent)) {
+                        Text("Scan products", color = DeepEmerald, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                items(drafts, key = { it.id }) { draft ->
+                    val units = draft.items.sumOf { it.quantity }
+                    val total = draft.items.sumOf { it.lineTotal }
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(containerColor = CardEmerald),
+                        shape = RoundedCornerShape(14.dp),
+                    ) {
+                        Column(modifier = Modifier.padding(14.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(draft.title, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                    Text(
+                                        "${SimpleDateFormat("dd MMM yyyy, HH:mm", Locale.getDefault()).format(Date(draft.savedAt))} · ${draft.customerPhone.ifBlank { "No phone" }}",
+                                        color = Color.Gray,
+                                        fontSize = 10.sp,
+                                    )
+                                }
+                                Text("₹${total.toInt()}", color = MintGreen, fontWeight = FontWeight.ExtraBold, fontSize = 16.sp)
+                            }
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text("${draft.items.size} products · $units units · ${draft.paymentMode}", color = GoldAccent, fontSize = 11.sp)
+                            Text(
+                                draft.items.joinToString { "${it.name} ×${it.quantity}" },
+                                color = Color.LightGray,
+                                fontSize = 10.sp,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Button(
+                                    onClick = { onResume(draft) },
+                                    colors = ButtonDefaults.buttonColors(containerColor = GoldAccent),
+                                ) {
+                                    Text("Resume bill", color = DeepEmerald, fontWeight = FontWeight.Bold)
+                                }
+                                OutlinedButton(
+                                    onClick = { onDelete(draft) },
+                                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
+                                ) {
+                                    Text("Delete")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 

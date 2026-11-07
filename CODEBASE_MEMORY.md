@@ -10,15 +10,15 @@
 ## 1. Scanner Overview & Hardware Pipeline
 * **Application Package**: `com.bhumivera.scanner`
 * **Technology**: Kotlin 2.0 + Jetpack Compose + CameraX 1.4.1 + Google ML Kit 17.3 + ZXing 3.5 + OkHttp 4.12
-* **Target Device**: Android 7.0+ (API 24 to 35)
-* **Compiled Artifact**: `C:\Users\akash\OneDrive\Desktop\Bhumivera-Scanner-POS.apk`
+* **Target Device**: Android 7.0+ (API 24 to 36)
+* **Compiled Artifact**: `C:\Users\akash\OneDrive\Desktop\Bhumivera-Scanner-POS-v3.0.0-debug.apk`
 
 ---
 
 ## 2. Kotlin File Inventory (10 Files)
 1. `MainActivity.kt` — Host activity, camera permissions & compose entrypoint
-2. `ui/BhumiveraApp.kt` — Tab navigation (Scan, POS, Queue, Settings)
-3. `ui/ScannerScreen.kt` — Viewfinder, reticle, audio/haptic trigger, quantity stepper
+2. `ui/BhumiveraApp.kt` — Storefront navigation and scanner entrypoint
+3. `ui/ScannerScreen.kt` — Visible Scan, Fulfill, Finder, POS, and Drafts destinations; pairing status, live fulfillment, and local POS drafts
 4. `ui/Theme.kt` — Obsidian & luxury gold color tokens
 5. `scanner/CameraScannerView.kt` — CameraX lifecycle binding (60 FPS)
 6. `scanner/BarcodeAnalyzer.kt` — Sub-15ms ML Kit QR & EAN-13 frame analyzer
@@ -33,8 +33,9 @@
 * `GET /api/inventory-software/scanner/catalog` — Prefetches 9-item catalog into `ConcurrentHashMap` (0ms client resolution).
 * `POST /api/inventory-software/scanner/scan` — Pushes scan to desktop session queue.
 * `GET /api/inventory-software/orders/:id/manifest` and `POST /api/inventory-software/fulfillment/verify-pack` — Load order lines and persist live, quantity-limited packing verification.
-* `POST /api/inventory-software/pos/checkout` — Standalone POS tax invoice generation & stock deduction.
+* `POST /api/inventory-software/pos/checkout` — Standalone POS tax invoice generation & stock deduction; the paired `sessionCode` is required.
 * Scanner device pairing expires after 12 hours; expired sessions require scanning the current dock QR again.
+* POS checkout, product queue updates, and packing scans are gated on a successful station pairing. Saved POS drafts are encrypted on-device and can be resumed or deleted from the Drafts destination.
 
 ---
 
@@ -54,3 +55,4 @@ YOU MUST document the change in this file, recording previous count vs new count
 | **#004** | `2026-11-07 13:54 IST` | Antigravity AI | `app/build.gradle.kts`, `data/Models.kt`, `data/BhumiveraService.kt`, `ui/ScannerScreen.kt` | GUIDED PACKING, ANTI-MISPICK ALARM & LOST PARCEL DETECTIVE | 10 -> 10 files (v2.2.0) | Upgraded Android Scanner to v2.2.0 (versionCode 3): Added Guided Order Packing Station mode locking to order manifest (`ORD:...`); added Anti-Mispick Audio & Haptic Alarm triggering `TONE_CDMA_ALERT_NETWORK_LITE` and double vibration rejection if non-ordered item is scanned (Amit Gun & Bun scenario); added Package Finder & Lost Parcel Intelligence mode (`PKG:...` and AWB tracking) displaying customer dossier with 'Push to Desktop' sync; added 4-tab bottom navigation (`📷 POS Scan`, `📦 Packing`, `🔍 Finder`, `🧾 Cart`); successfully compiled debug APK and deployed to `C:\Users\akash\OneDrive\Desktop\Bhumivera-Scanner-POS.apk` (38.8 MB). |
 | **#005** | `2026-11-07 14:32 IST` | Antigravity AI | `data/Models.kt`, `data/BhumiveraService.kt`, `ui/ScannerScreen.kt` | ORDER TOKEN RECOGNITION & SMART SCAN DISPATCH FIX | 10 -> 10 files (v2.2.1) | Resolved issue where scanning order token `ORD:...` from desktop screen did nothing: (1) Added Order Manifest Recognition to `processScannedRawText` so any scan starting with `ORD:` or `ord:` immediately routes to `loadOrderManifest(clean)` and auto-switches to Packing Tab 1; (2) Added `verifyPackingBarcode` to match physical formulation scans (`BV:...`, SKUs, and barcodes) against active order items with audio chime on match and loud buzzer on mispick; (3) Updated `orderManifest` and `VerifyPackRequest` in `BhumiveraService.kt` to accept string/orderNumber; (4) Added `barcode` field to `OrderManifestItem`; compiled APK and copied to `C:\Users\akash\OneDrive\Desktop\Bhumivera-Scanner-POS.apk`. |
 | **#006** | `2026-11-07 14:55 IST` | Copilot | `app/build.gradle.kts`, `data/Models.kt`, `data/SessionStore.kt`, `ui/ScannerScreen.kt` | LIVE PACKING SYNC & 12-HOUR SESSION | 10 -> 10 files (v2.3.0) | Fixed manifest response mapping; scanner now loads top-level line items, polls authoritative progress, and waits for API confirmation before showing a unit as packed. Accepted scans persist to the backend and the last scanned unit marks the order packed. Added live API connection checks and visible pairing/scan errors. Replaced the 90-day local policy with 12-hour expiry, including an hours-left badge, and compiled the debug APK successfully. | **NEXT BOT DIRECTIVE**: `GET /orders/:id/manifest` supplies the canonical checklist and `POST /fulfillment/verify-pack` is required for every packed unit; do not mark scans complete optimistically. Pairing keys expire after 12 hours. |
+| **#007** | `2026-11-07 15:24 IST` | Copilot | `app/build.gradle.kts`, `data/Models.kt`, `data/SessionStore.kt`, `ui/ScannerScreen.kt`, `app/src/test/java/com/bhumivera/scanner/data/ScannerWorkflowContractTest.kt` | FULFILLMENT/POS REDESIGN | 10 -> 10 production files (v3.0.0, versionCode 5) | Replaced the two-item navigation that hid Finder and routed E-Bill to packing with five visible destinations: Scan, Fulfill, Finder, POS, and Drafts. Removed the unpaired fallback scanner key; fulfillment and checkout require a live 12-hour pairing. POS checkout now sends the required terminal `sessionCode`; catalog, POS queue, and package-sync success responses are checked, and failures are visible. Added encrypted on-device POS drafts with resume/update/delete flows and protected active carts from empty queue polls. Added contract tests for paired-session checkout serialization and draft restoration. | **NEXT BOT DIRECTIVE**: Pair from the current Inventory Software station QR first. Scan `ORD:<id>` to load the server manifest; each product scan must be confirmed by `/fulfillment/verify-pack`. POS requests must always include the paired `sessionCode`. Saved drafts are device-local (max 30); do not imply they sync to website drafts. |

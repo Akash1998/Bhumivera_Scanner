@@ -4,6 +4,8 @@ import android.content.Context
 import androidx.core.content.edit
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
+import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
 
 class SessionStore(context: Context) {
     private val preferences = EncryptedSharedPreferences.create(
@@ -21,8 +23,7 @@ class SessionStore(context: Context) {
     }
 
     fun scannerApiKey(): String {
-        val stored = preferences.getString(SCANNER_KEY, null)
-        return if (!stored.isNullOrBlank()) stored else DEFAULT_SCANNER_KEY
+        return preferences.getString(SCANNER_KEY, null).orEmpty()
     }
 
     fun saveScannerApiKey(key: String) {
@@ -61,7 +62,18 @@ class SessionStore(context: Context) {
         preferences.edit(commit = true) { putLong(PAIRED_AT_KEY, time) }
     }
 
-    fun isPaired(): Boolean = pairedAt() > 0L
+    fun isPaired(): Boolean = scannerApiKey().isNotBlank() && pairedAt() > 0L && !isSessionExpired()
+
+    fun loadPosDrafts(): List<PosDraftOrder> {
+        val json = preferences.getString(POS_DRAFTS_KEY, null) ?: return emptyList()
+        val type = object : TypeToken<List<PosDraftOrder>>() {}.type
+        return Gson().fromJson<List<PosDraftOrder>>(json, type) ?: emptyList()
+    }
+
+    fun savePosDrafts(drafts: List<PosDraftOrder>) {
+        val json = Gson().toJson(drafts)
+        preferences.edit(commit = true) { putString(POS_DRAFTS_KEY, json) }
+    }
 
     fun expiresAt(): Long {
         val paired = pairedAt()
@@ -82,14 +94,13 @@ class SessionStore(context: Context) {
         return ((remaining + 3_599_999L) / 3_600_000L).toInt()
     }
 
-    fun isSessionExpired(): Boolean = isPaired() && System.currentTimeMillis() >= expiresAt()
+    fun isSessionExpired(): Boolean = pairedAt() > 0L && System.currentTimeMillis() >= expiresAt()
 
     fun clear() {
         preferences.edit(commit = true) { clear() }
     }
 
     companion object {
-        const val DEFAULT_SCANNER_KEY = "BV-SCAN-34F204D93552CF7D3A398568"
         const val TWELVE_HOURS_MILLIS = 12L * 60 * 60 * 1000L
         private const val TOKEN_KEY = "customer_token"
         private const val SCANNER_KEY = "scanner_api_key"
@@ -98,5 +109,6 @@ class SessionStore(context: Context) {
         private const val AUTO_ADD_KEY = "scanner_auto_add_mode"
         private const val PAIRED_AT_KEY = "scanner_paired_at"
         private const val EXPIRES_AT_KEY = "scanner_expires_at"
+        private const val POS_DRAFTS_KEY = "pos_saved_drafts"
     }
 }

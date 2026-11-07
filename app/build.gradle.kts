@@ -20,8 +20,8 @@ android {
         applicationId = "com.bhumivera.scanner"
         minSdk = 24
         targetSdk = 36
-        versionCode = 4
-        versionName = "2.3.0"
+        versionCode = 5
+        versionName = "3.0.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "BACKEND_BASE_URL", "\"$backendBaseUrl\"")
         buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", "\"$googleWebClientId\"")
