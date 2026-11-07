@@ -61,26 +61,28 @@ class SessionStore(context: Context) {
         preferences.edit(commit = true) { putLong(PAIRED_AT_KEY, time) }
     }
 
+    fun isPaired(): Boolean = pairedAt() > 0L
+
     fun expiresAt(): Long {
+        val paired = pairedAt()
+        if (paired <= 0L) return 0L
+        val twelveHourExpiry = paired + TWELVE_HOURS_MILLIS
         val stored = preferences.getLong(EXPIRES_AT_KEY, 0L)
-        if (stored > 0L) return stored
-        // Default: 90 days from pairedAt or now
-        val base = if (pairedAt() > 0L) pairedAt() else System.currentTimeMillis()
-        return base + NINETY_DAYS_MILLIS
+        return if (stored > 0L) minOf(stored, twelveHourExpiry) else twelveHourExpiry
     }
 
     fun saveExpiresAt(time: Long) {
         preferences.edit(commit = true) { putLong(EXPIRES_AT_KEY, time) }
     }
 
-    fun daysRemaining(): Int {
-        val exp = expiresAt()
-        val now = System.currentTimeMillis()
-        if (exp <= now) return 0
-        return ((exp - now) / (24 * 3600 * 1000L)).coerceAtLeast(0L).toInt()
+    fun hoursRemaining(): Int {
+        if (!isPaired()) return 0
+        val remaining = expiresAt() - System.currentTimeMillis()
+        if (remaining <= 0L) return 0
+        return ((remaining + 3_599_999L) / 3_600_000L).toInt()
     }
 
-    fun isSessionExpired(): Boolean = System.currentTimeMillis() > expiresAt()
+    fun isSessionExpired(): Boolean = isPaired() && System.currentTimeMillis() >= expiresAt()
 
     fun clear() {
         preferences.edit(commit = true) { clear() }
@@ -88,7 +90,7 @@ class SessionStore(context: Context) {
 
     companion object {
         const val DEFAULT_SCANNER_KEY = "BV-SCAN-34F204D93552CF7D3A398568"
-        const val NINETY_DAYS_MILLIS = 90L * 24 * 3600 * 1000L
+        const val TWELVE_HOURS_MILLIS = 12L * 60 * 60 * 1000L
         private const val TOKEN_KEY = "customer_token"
         private const val SCANNER_KEY = "scanner_api_key"
         private const val BACKEND_URL_KEY = "scanner_backend_url"

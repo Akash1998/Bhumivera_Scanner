@@ -99,6 +99,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
+import java.text.SimpleDateFormat
+import java.util.Locale
+import java.util.TimeZone
 
 // Luxury Brand Palette
 private val GoldAccent = Color(0xFFD4AF37)
@@ -106,6 +109,15 @@ private val DeepEmerald = Color(0xFF14251C)
 private val DarkSurface = Color(0xFF0D1812)
 private val CardEmerald = Color(0xFF193225)
 private val MintGreen = Color(0xFF10B981)
+
+private fun apiFailureMessage(error: Exception): String? {
+    val body = (error as? retrofit2.HttpException)?.response()?.errorBody()?.string() ?: return null
+    return try {
+        org.json.JSONObject(body).optString("message").takeIf(String::isNotBlank)
+    } catch (_: Exception) {
+        null
+    }
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -277,6 +289,9 @@ fun ScannerScreen(
                     manifestItems.addAll(res.items)
                     triggerBeepAndHaptic(context)
                     statusMessage = "📦 Manifest Loaded: Order #${res.order.orderNumber} (${res.order.customerName})"
+                    if (res.items.isEmpty()) {
+                        packingErrorAlert = "Order #${res.order.orderNumber} loaded, but the server returned no order items. Refresh the order in Inventory Software or check its items."
+                    }
                     selectedTab = 1
                 } else {
                     triggerMismatchAlarmAndHaptic(context)
@@ -284,7 +299,7 @@ fun ScannerScreen(
                 }
             } catch (e: Exception) {
                 triggerMismatchAlarmAndHaptic(context)
-                packingErrorAlert = "Failed to load manifest for Order '$raw': ${e.message}"
+                packingErrorAlert = apiFailureMessage(e) ?: "Failed to load manifest for Order '$raw': ${e.message}"
             } finally {
                 isLoadingManifest = false
             }
@@ -349,35 +364,68 @@ fun ScannerScreen(
                 return
             }
 
-            val updated = target.copy(verifiedCount = target.verifiedCount + 1)
-            manifestItems[itemIndex] = updated
-            triggerBeepAndHaptic(context)
-            packingErrorAlert = null
-
-            val totalUnits = manifestItems.sumOf { it.quantity }
-            val totalVerified = manifestItems.sumOf { it.verifiedCount }
-            if (totalVerified >= totalUnits && totalUnits > 0) {
-                packingSuccessNotice = "🎉 ALL $totalUnits ITEMS PACKED! Order Ready for Shipping Label."
-            } else {
-                packingSuccessNotice = "✔ Packed: ${target.name} (${updated.verifiedCount}/${target.quantity})"
-            }
-
             scope.launch {
                 try {
-                    service.verifyPack(
+                    val result = service.verifyPack(
                         VerifyPackRequest(
                             orderId = order.id.toString(),
                             barcode = clean,
+                            sessionCode = sessionStore.sessionCode(),
                             scannerApiKey = sessionStore.scannerApiKey()
                         )
                     )
-                } catch (_: Exception) {}
+                    if (!result.success || !result.verified) {
+                        triggerMismatchAlarmAndHaptic(context)
+                        packingSuccessNotice = null
+                        packingErrorAlert = result.message ?: "The server did not confirm this product scan."
+                        return@launch
+                    }
+                    val verifiedCount = result.progress?.verifiedCount ?: (target.verifiedCount + 1)
+                    manifestItems[itemIndex] = target.copy(verifiedCount = verifiedCount)
+                    triggerBeepAndHaptic(context)
+                    packingErrorAlert = null
+                    val totalUnits = result.progress?.totalUnits ?: manifestItems.sumOf { it.quantity }
+                    val totalVerified = result.progress?.totalVerified ?: manifestItems.sumOf { it.verifiedCount }
+                    packingSuccessNotice = if (result.orderComplete) {
+                        "🎉 ALL $totalUnits ITEMS PACKED! Order is ready for dispatch."
+                    } else {
+                        result.message ?: "✔ Packed: ${target.name} ($verifiedCount/${target.quantity})"
+                    }
+                    statusMessage = result.message ?: "Packed ${target.name} ($totalVerified/$totalUnits)"
+                } catch (e: Exception) {
+                    triggerMismatchAlarmAndHaptic(context)
+                    packingSuccessNotice = null
+                    packingErrorAlert = apiFailureMessage(e) ?: "Could not sync this scan with the server: ${e.message ?: "network error"}"
+                    statusMessage = "Scan not synced. Check API connection and retry."
+                }
             }
         } else {
             triggerMismatchAlarmAndHaptic(context)
             packingSuccessNotice = null
             packingErrorAlert = "⛔ MISPICK REJECTED!\n\nScanned \"$resolvedName\" does NOT belong to Order #${order.orderNumber} (${order.customerName})!\n\nDo NOT pack this item into the parcel!"
             statusMessage = "⛔ Mispick Rejected: $resolvedName"
+        }
+    }
+
+    LaunchedEffect(activeOrder?.id, selectedTab) {
+        val orderId = activeOrder?.id ?: return@LaunchedEffect
+        if (selectedTab != 1) return@LaunchedEffect
+        while (activeOrder?.id == orderId && selectedTab == 1) {
+            try {
+                val latest = service.orderManifest(orderId.toString())
+                if (latest.success && latest.order?.id == orderId) {
+                    manifestItems.clear()
+                    manifestItems.addAll(latest.items)
+                    packingErrorAlert = null
+                    statusMessage = "Live packing sync · ${latest.items.sumOf { it.verifiedCount }} / ${latest.items.sumOf { it.quantity }} units scanned"
+                } else if (latest.success) {
+                    packingErrorAlert = latest.message ?: "The server returned an invalid packing manifest."
+                }
+            } catch (e: Exception) {
+                packingErrorAlert = "Live scanner sync lost: ${e.message ?: "network error"}. Scans will not be marked until the API reconnects."
+                statusMessage = "🔴 Packing API disconnected"
+            }
+            delay(2500)
         }
     }
 
@@ -415,15 +463,16 @@ fun ScannerScreen(
         if (clean.isBlank()) return
 
         // 1. AUTO-PAIRING RECOGNITION (When scanning Pairing QR from screen!)
-        if (clean.contains("BHUMIVERA_ANDROID_QR_SCANNER") || (clean.startsWith("{") && clean.contains("scannerApiKey"))) {
+        val isPairingPayload = clean.contains("BHUMIVERA_ANDROID_QR_SCANNER") ||
+            (clean.startsWith("{") && clean.contains("scannerApiKey"))
+        if (isPairingPayload) {
             try {
                 val json = org.json.JSONObject(clean)
                 val key = json.optString("scannerApiKey")
                 val sessionCode = json.optString("sessionCode")
                 val endpoint = json.optString("endpoint")
-                if (key.isNotBlank()) {
-                    sessionStore.saveScannerApiKey(key)
-                }
+                if (key.isBlank()) throw IllegalArgumentException("The pairing QR does not contain a scanner key.")
+                sessionStore.saveScannerApiKey(key)
                 if (sessionCode.isNotBlank()) {
                     sessionStore.saveSessionCode(sessionCode)
                 }
@@ -433,24 +482,71 @@ fun ScannerScreen(
                         sessionStore.saveBackendUrl(base)
                     }
                 }
-                sessionStore.savePairedAt(System.currentTimeMillis())
-                sessionStore.saveExpiresAt(System.currentTimeMillis() + SessionStore.NINETY_DAYS_MILLIS)
-                triggerBeepAndHaptic(context)
-                pairingSuccessMessage = "Successfully Paired with Warehouse Dock Station!\n\nStation: " + sessionStore.sessionCode() + "\nToken Validity: 90 Days Active (" + sessionStore.daysRemaining() + " days remaining)\nScanner API Key: " + sessionStore.scannerApiKey() + "\nEndpoint: " + sessionStore.backendUrl() + "\n\nNow point camera at product batch QR stickers or barcodes to pick, pack, and bill!"
-                showPairingSuccessDialog = true
-                statusMessage = "🟢 Station Linked: " + sessionStore.sessionCode() + " (90d Active)"
+                val pairedAt = System.currentTimeMillis()
+                sessionStore.savePairedAt(pairedAt)
+                val expiresAt = json.optString("expiresAt")
+                val parsedExpiry = if (expiresAt.isNotBlank()) {
+                    try {
+                        SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US).apply {
+                            timeZone = TimeZone.getTimeZone("UTC")
+                        }.parse(expiresAt)?.time
+                    } catch (_: Exception) {
+                        null
+                    }
+                } else {
+                    null
+                }
+                sessionStore.saveExpiresAt(parsedExpiry ?: pairedAt + SessionStore.TWELVE_HOURS_MILLIS)
+                scope.launch {
+                    try {
+                        val ping = BhumiveraService.create(sessionStore).scannerPing(sessionStore.scannerApiKey())
+                        if (ping.success != true) {
+                            throw IllegalStateException(ping.message ?: "The scanner API did not confirm the connection.")
+                        }
+                        triggerBeepAndHaptic(context)
+                        pairingSuccessMessage = "Successfully paired with Warehouse Dock Station and connected to the live API.\n\nStation: ${sessionStore.sessionCode()}\nConnection: Online\nSession: ${sessionStore.hoursRemaining()} hours remaining\nScanner API Key: ${sessionStore.scannerApiKey()}\n\nScan an order token (ORD:...) to load its live packing checklist."
+                        showPairingSuccessDialog = true
+                        statusMessage = "🟢 API Connected · Station ${sessionStore.sessionCode()}"
+                    } catch (e: Exception) {
+                        triggerMismatchAlarmAndHaptic(context)
+                        val detail = apiFailureMessage(e) ?: e.message ?: "network error"
+                        packingErrorAlert = "Pairing key saved, but the API connection test failed: $detail Check the dock QR and network, then scan the pairing QR again."
+                        statusMessage = "🔴 Scanner key saved · API connection failed"
+                        pairingSuccessMessage = "The pairing key was saved, but the live API connection test failed.\n\n$detail\n\nCheck the network and scan the current dock QR again."
+                        showPairingSuccessDialog = true
+                    }
+                }
                 return
-            } catch (_: Exception) {}
+            } catch (e: Exception) {
+                triggerMismatchAlarmAndHaptic(context)
+                packingErrorAlert = "Could not read the scanner pairing QR: ${e.message ?: "invalid QR data"}"
+                statusMessage = "🔴 Pairing QR could not be read"
+                return
+            }
         }
 
         if (clean.startsWith("BV-SCAN-")) {
             sessionStore.saveScannerApiKey(clean)
-            sessionStore.savePairedAt(System.currentTimeMillis())
-            sessionStore.saveExpiresAt(System.currentTimeMillis() + SessionStore.NINETY_DAYS_MILLIS)
-            triggerBeepAndHaptic(context)
-            pairingSuccessMessage = "Successfully Paired with Warehouse Dock Station!\n\nScanner API Key: " + clean + "\nToken Validity: 90 Days Active (" + sessionStore.daysRemaining() + " days remaining)\nStation: " + sessionStore.sessionCode() + "\nEndpoint: " + sessionStore.backendUrl() + "\n\nNow point camera at product batch QR stickers or barcodes to pick, pack, and bill!"
-            showPairingSuccessDialog = true
-            statusMessage = "🟢 Station Linked with Key: " + clean
+            val pairedAt = System.currentTimeMillis()
+            sessionStore.savePairedAt(pairedAt)
+            sessionStore.saveExpiresAt(pairedAt + SessionStore.TWELVE_HOURS_MILLIS)
+            scope.launch {
+                try {
+                    val ping = BhumiveraService.create(sessionStore).scannerPing(clean)
+                    if (ping.success != true) throw IllegalStateException(ping.message ?: "The scanner API did not confirm the connection.")
+                    triggerBeepAndHaptic(context)
+                    pairingSuccessMessage = "Successfully paired and connected to the live API.\n\nScanner API Key: $clean\nStation: ${sessionStore.sessionCode()}\nSession: ${sessionStore.hoursRemaining()} hours remaining\nConnection: Online"
+                    showPairingSuccessDialog = true
+                    statusMessage = "🟢 API Connected · Station ${sessionStore.sessionCode()}"
+                } catch (e: Exception) {
+                    triggerMismatchAlarmAndHaptic(context)
+                    val detail = apiFailureMessage(e) ?: e.message ?: "network error"
+                    packingErrorAlert = "Scanner key saved, but API connection failed: $detail."
+                    statusMessage = "🔴 Scanner key saved · API connection failed"
+                    pairingSuccessMessage = "The scanner key was saved, but the live API connection test failed.\n\n$detail"
+                    showPairingSuccessDialog = true
+                }
+            }
             return
         }
 
@@ -603,12 +699,16 @@ fun ScannerScreen(
                             }
                             Spacer(modifier = Modifier.width(4.dp))
                             Surface(
-                                color = Color(0xFF0F766E).copy(alpha = 0.35f),
+                                color = if (sessionStore.isSessionExpired()) Color(0xFF7F1D1D).copy(alpha = 0.55f) else Color(0xFF0F766E).copy(alpha = 0.35f),
                                 shape = RoundedCornerShape(4.dp)
                             ) {
                                 Text(
-                                    text = "${sessionStore.daysRemaining()}d Left",
-                                    color = Color(0xFF5EEAD4),
+                                    text = when {
+                                        !sessionStore.isPaired() -> "Not paired"
+                                        sessionStore.isSessionExpired() -> "Session expired"
+                                        else -> "${sessionStore.hoursRemaining()}h Left"
+                                    },
+                                    color = if (sessionStore.isSessionExpired() || !sessionStore.isPaired()) Color(0xFFFCA5A5) else Color(0xFF5EEAD4),
                                     fontSize = 9.sp,
                                     fontWeight = FontWeight.Bold,
                                     modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
@@ -2131,7 +2231,7 @@ fun ScannerScreen(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("⚡", fontSize = 20.sp)
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("Terminal Paired!", color = GoldAccent, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    Text("Pairing Status", color = GoldAccent, fontWeight = FontWeight.Bold, fontSize = 16.sp)
                 }
             },
             text = {
@@ -2142,7 +2242,7 @@ fun ScannerScreen(
                     onClick = { showPairingSuccessDialog = false },
                     colors = ButtonDefaults.buttonColors(containerColor = GoldAccent)
                 ) {
-                    Text("Start Scanning Products", color = DeepEmerald, fontWeight = FontWeight.Bold)
+                    Text("Continue", color = DeepEmerald, fontWeight = FontWeight.Bold)
                 }
             },
             containerColor = CardEmerald

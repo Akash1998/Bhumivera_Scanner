@@ -279,13 +279,15 @@ data class OrderManifestOrder(
     @SerializedName("customerName") val customerName: String? = null,
     @SerializedName("customerPhone") val customerPhone: String? = null,
     @SerializedName("shippingAddress") val shippingAddress: String? = null,
-    val city: String? = null,
+    @SerializedName("shippingCity") val city: String? = null,
+    @SerializedName("shippingState") val state: String? = null,
+    @SerializedName("shippingPincode") val pincode: String? = null,
     @SerializedName("totalAmount") val totalAmount: Double = 0.0,
     @SerializedName("paymentMode") val paymentMode: String? = null,
 )
 
 data class OrderManifestItem(
-    val id: Int? = null,
+    @SerializedName("orderItemId") val id: Int? = null,
     @SerializedName("productId") val productId: Int? = null,
     val sku: String? = null,
     val barcode: String? = null,
@@ -302,15 +304,27 @@ data class OrderManifestItem(
 data class VerifyPackRequest(
     val orderId: String,
     val barcode: String,
+    val sessionCode: String = "DEFAULT-POS-TERMINAL",
     val scannerApiKey: String? = null,
 )
 
 data class VerifyPackResponse(
     val success: Boolean = false,
     val verified: Boolean = false,
+    val orderComplete: Boolean = false,
+    val orderStatus: String? = null,
     val message: String? = null,
     val code: String? = null,
+    val progress: PackProgress? = null,
     val product: VerifyPackProduct? = null,
+)
+
+data class PackProgress(
+    val orderItemId: Int? = null,
+    val verifiedCount: Int = 0,
+    val quantity: Int = 0,
+    val totalVerified: Int = 0,
+    val totalUnits: Int = 0,
 )
 
 data class VerifyPackProduct(
