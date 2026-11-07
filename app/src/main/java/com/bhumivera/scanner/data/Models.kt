@@ -260,3 +260,88 @@ data class ScannerQueueClearRequest(
     val sessionCode: String = "DEFAULT-POS-TERMINAL",
     val scannerApiKey: String? = null,
 )
+
+// ==========================================
+// GUIDED ORDER PACKING & ZERO-MISPICK MODELS
+// ==========================================
+
+data class OrderManifestResponse(
+    val success: Boolean = false,
+    val message: String? = null,
+    val order: OrderManifestOrder? = null,
+    val items: List<OrderManifestItem> = emptyList(),
+)
+
+data class OrderManifestOrder(
+    val id: Int = 0,
+    @SerializedName("orderNumber") val orderNumber: String = "",
+    val status: String = "",
+    @SerializedName("customerName") val customerName: String? = null,
+    @SerializedName("customerPhone") val customerPhone: String? = null,
+    @SerializedName("shippingAddress") val shippingAddress: String? = null,
+    val city: String? = null,
+    @SerializedName("totalAmount") val totalAmount: Double = 0.0,
+    @SerializedName("paymentMode") val paymentMode: String? = null,
+)
+
+data class OrderManifestItem(
+    val id: Int? = null,
+    @SerializedName("productId") val productId: Int? = null,
+    val sku: String? = null,
+    val name: String = "",
+    val quantity: Int = 1,
+    val price: Double = 0.0,
+    @SerializedName("binCode") val binCode: String? = null,
+    @SerializedName("batchNo") val batchNo: String? = null,
+    var verifiedCount: Int = 0,
+) {
+    val isFulfilled: Boolean get() = verifiedCount >= quantity
+}
+
+data class VerifyPackRequest(
+    val orderId: Int,
+    val barcode: String,
+    val scannerApiKey: String? = null,
+)
+
+data class VerifyPackResponse(
+    val success: Boolean = false,
+    val verified: Boolean = false,
+    val message: String? = null,
+    val code: String? = null,
+    val product: VerifyPackProduct? = null,
+)
+
+data class VerifyPackProduct(
+    val productId: Int? = null,
+    val name: String? = null,
+    val sku: String? = null,
+)
+
+// ==========================================
+// PACKAGE FINDER & LOST PARCEL MODELS
+// ==========================================
+
+data class PackageLookupResponse(
+    val success: Boolean = false,
+    val message: String? = null,
+    @SerializedName("package") val packageData: PackageLookupData? = null,
+)
+
+data class PackageLookupData(
+    val packageId: String? = null,
+    val orderId: Int = 0,
+    val orderNumber: String = "",
+    val status: String = "",
+    val customerName: String? = null,
+    val customerPhone: String? = null,
+    val shippingAddress: String? = null,
+    val city: String? = null,
+    val state: String? = null,
+    val pincode: String? = null,
+    val trackingNumber: String? = null,
+    val courier: String? = null,
+    val totalAmount: Double = 0.0,
+    val paymentMode: String? = null,
+    val items: List<OrderManifestItem> = emptyList(),
+)

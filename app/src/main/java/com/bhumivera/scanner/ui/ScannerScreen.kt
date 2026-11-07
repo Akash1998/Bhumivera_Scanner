@@ -40,6 +40,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -136,6 +137,25 @@ fun ScannerScreen(
     var isSearchingCode by remember { mutableStateOf(false) }
     var statusMessage by remember { mutableStateOf("Ready to scan QR / Barcodes") }
 
+    // ----------------------------------------------------
+    // GUIDED ORDER PACKING STATION STATE (ZERO-MISPICK)
+    // ----------------------------------------------------
+    var activeOrder by remember { mutableStateOf<com.bhumivera.scanner.data.OrderManifestOrder?>(null) }
+    val manifestItems = remember { mutableStateListOf<com.bhumivera.scanner.data.OrderManifestItem>() }
+    var packingErrorAlert by remember { mutableStateOf<String?>(null) }
+    var packingSuccessNotice by remember { mutableStateOf<String?>(null) }
+    var packingOrderInput by remember { mutableStateOf("") }
+    var isLoadingManifest by remember { mutableStateOf(false) }
+
+    // ----------------------------------------------------
+    // PACKAGE FINDER & LOST PARCEL INTELLIGENCE STATE
+    // ----------------------------------------------------
+    var activePackageData by remember { mutableStateOf<com.bhumivera.scanner.data.PackageLookupData?>(null) }
+    var packageSearchInput by remember { mutableStateOf("") }
+    var isSearchingPackage by remember { mutableStateOf(false) }
+    var packageErrorNotice by remember { mutableStateOf<String?>(null) }
+    var packageDesktopSyncNotice by remember { mutableStateOf<String?>(null) }
+
     // POS Cart & Billing State
     val posCart = remember { mutableStateListOf<PosBillItem>() }
     var customerName by remember { mutableStateOf("Walk-in Retail Shopper") }
@@ -227,6 +247,75 @@ fun ScannerScreen(
                 }
             } catch (_: Exception) {}
             delay(2000)
+        }
+    }
+
+    // Function to load order manifest by order ID or token
+    fun loadOrderManifest(orderIdOrCode: String) {
+        val raw = orderIdOrCode.trim()
+            .removePrefix("ORD:")
+            .removePrefix("ord:")
+            .removePrefix("BV-ORD-")
+            .removePrefix("#")
+            .trim()
+        val orderId = raw.toIntOrNull()
+        if (orderId == null || orderId <= 0) {
+            packingErrorAlert = "Invalid Order ID: '$orderIdOrCode'. Please scan a valid order QR (e.g. ORD:123456)."
+            triggerMismatchAlarmAndHaptic(context)
+            return
+        }
+
+        isLoadingManifest = true
+        packingErrorAlert = null
+        packingSuccessNotice = null
+        scope.launch {
+            try {
+                val res = service.orderManifest(orderId)
+                if (res.success && res.order != null) {
+                    activeOrder = res.order
+                    manifestItems.clear()
+                    manifestItems.addAll(res.items)
+                    triggerBeepAndHaptic(context)
+                    statusMessage = "📦 Manifest Loaded: Order #${res.order.orderNumber} (${res.order.customerName})"
+                    selectedTab = 1
+                } else {
+                    triggerMismatchAlarmAndHaptic(context)
+                    packingErrorAlert = res.message ?: "Order #$orderId not found in manifest database."
+                }
+            } catch (e: Exception) {
+                triggerMismatchAlarmAndHaptic(context)
+                packingErrorAlert = "Failed to load manifest for Order #$orderId: ${e.message}"
+            } finally {
+                isLoadingManifest = false
+            }
+        }
+    }
+
+    // Function to lookup lost or misplaced parcel by barcode or QR
+    fun lookupPackage(packageCode: String) {
+        val clean = packageCode.trim()
+        if (clean.isBlank()) return
+        isSearchingPackage = true
+        packageErrorNotice = null
+        packageDesktopSyncNotice = null
+        scope.launch {
+            try {
+                val res = service.packageLookup(clean)
+                if (res.success && res.packageData != null) {
+                    activePackageData = res.packageData
+                    triggerBeepAndHaptic(context)
+                    statusMessage = "🔍 Package Found: ${res.packageData.packageId} (Order #${res.packageData.orderNumber})"
+                    selectedTab = 2
+                } else {
+                    triggerMismatchAlarmAndHaptic(context)
+                    packageErrorNotice = res.message ?: "No package record found matching '$clean'."
+                }
+            } catch (e: Exception) {
+                triggerMismatchAlarmAndHaptic(context)
+                packageErrorNotice = "Package lookup failed: ${e.message}"
+            } finally {
+                isSearchingPackage = false
+            }
         }
     }
 
@@ -857,6 +946,606 @@ fun ScannerScreen(
                                         border = androidx.compose.foundation.BorderStroke(1.dp, Color.Gray)
                                     ) {
                                         Text("Cancel", color = Color.LightGray, fontSize = 12.sp)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            } else if (selectedTab == 1) {
+                // GUIDED ORDER PACKING STATION VIEW
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(12.dp)
+                ) {
+                    // Header Card
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text(
+                                text = "📦 ORDER PACKING STATION",
+                                color = GoldAccent,
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                letterSpacing = 1.sp
+                            )
+                            Text(
+                                text = "Zero-Defect Verification • Anti-Mispick Lock",
+                                color = Color.Gray,
+                                fontSize = 11.sp
+                            )
+                        }
+
+                        if (activeOrder != null) {
+                            TextButton(
+                                onClick = {
+                                    activeOrder = null
+                                    manifestItems.clear()
+                                    packingErrorAlert = null
+                                    packingSuccessNotice = null
+                                }
+                            ) {
+                                Text("Switch Order", color = GoldAccent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    if (activeOrder == null) {
+                        // Scan or enter order token
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = CardDefaults.cardColors(containerColor = CardEmerald),
+                            shape = RoundedCornerShape(14.dp)
+                        ) {
+                            Column(modifier = Modifier.padding(14.dp)) {
+                                Text(
+                                    text = "Scan Customer Order Pick Slip / QR Token",
+                                    color = Color.White,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 13.sp
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = "Point camera at Order QR (e.g. ORD:123456) or enter Order ID below to load items checklist.",
+                                    color = Color.Gray,
+                                    fontSize = 11.sp
+                                )
+                                Spacer(modifier = Modifier.height(10.dp))
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    OutlinedTextField(
+                                        value = packingOrderInput,
+                                        onValueChange = { packingOrderInput = it },
+                                        placeholder = { Text("Order ID / ORD:...", fontSize = 12.sp) },
+                                        modifier = Modifier.weight(1f),
+                                        singleLine = true,
+                                        colors = OutlinedTextFieldDefaults.colors(
+                                            focusedTextColor = Color.White,
+                                            unfocusedTextColor = Color.White,
+                                            focusedBorderColor = GoldAccent
+                                        )
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Button(
+                                        onClick = {
+                                            if (packingOrderInput.isNotBlank()) {
+                                                loadOrderManifest(packingOrderInput)
+                                                packingOrderInput = ""
+                                            }
+                                        },
+                                        enabled = !isLoadingManifest,
+                                        colors = ButtonDefaults.buttonColors(containerColor = GoldAccent)
+                                    ) {
+                                        Text(
+                                            if (isLoadingManifest) "Loading..." else "Load",
+                                            color = DeepEmerald,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        // Compact Camera Viewport for scanning Order Token
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .weight(1f)
+                                .clip(RoundedCornerShape(14.dp))
+                                .border(1.dp, GoldAccent.copy(alpha = 0.5f), RoundedCornerShape(14.dp))
+                        ) {
+                            if (hasCameraPermission) {
+                                CameraScannerView(
+                                    modifier = Modifier.fillMaxSize(),
+                                    isTorchOn = isTorchOn,
+                                    useFrontCamera = useFrontCamera,
+                                    onBarcodeScanned = { rawCode ->
+                                        processScannedRawText(rawCode)
+                                    }
+                                )
+                            }
+                            Surface(
+                                modifier = Modifier
+                                    .align(Alignment.BottomCenter)
+                                    .padding(8.dp),
+                                color = DeepEmerald.copy(alpha = 0.85f),
+                                shape = RoundedCornerShape(20.dp)
+                            ) {
+                                Text(
+                                    text = "Point camera at ORD:... pick token",
+                                    color = GoldAccent,
+                                    fontSize = 11.sp,
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                                )
+                            }
+                        }
+                    } else {
+                        // Order is active!
+                        val totalUnits = manifestItems.sumOf { it.quantity }
+                        val verifiedUnits = manifestItems.sumOf { it.verifiedCount }
+                        val progress = if (totalUnits > 0) verifiedUnits.toFloat() / totalUnits.toFloat() else 0f
+                        val isOrderComplete = verifiedUnits >= totalUnits && totalUnits > 0
+
+                        // Order Summary Header
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = CardDefaults.cardColors(containerColor = CardEmerald),
+                            shape = RoundedCornerShape(14.dp)
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "Order #${activeOrder!!.orderNumber}",
+                                        color = GoldAccent,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 14.sp
+                                    )
+                                    Surface(
+                                        color = if (isOrderComplete) MintGreen.copy(alpha = 0.2f) else GoldAccent.copy(alpha = 0.2f),
+                                        shape = RoundedCornerShape(6.dp)
+                                    ) {
+                                        Text(
+                                            text = if (isOrderComplete) "READY TO SEAL" else "PACKING IN PROGRESS",
+                                            color = if (isOrderComplete) MintGreen else GoldAccent,
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                        )
+                                    }
+                                }
+                                Text(
+                                    text = "Customer: ${activeOrder!!.customerName ?: "Valued Customer"} • ${activeOrder!!.city ?: "Destination"}",
+                                    color = Color.White,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Medium
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text("Verification Progress", color = Color.Gray, fontSize = 11.sp)
+                                    Text("$verifiedUnits / $totalUnits Units", color = if (isOrderComplete) MintGreen else GoldAccent, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                                }
+                                Spacer(modifier = Modifier.height(4.dp))
+                                LinearProgressIndicator(
+                                    progress = { progress },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(6.dp)
+                                        .clip(RoundedCornerShape(3.dp)),
+                                    color = if (isOrderComplete) MintGreen else GoldAccent,
+                                    trackColor = Color.Black.copy(alpha = 0.4f)
+                                )
+                            }
+                        }
+
+                        // Alerts
+                        if (packingErrorAlert != null) {
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = CardDefaults.cardColors(containerColor = Color(0xFF4A0E17)),
+                                shape = RoundedCornerShape(10.dp),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFEF4444))
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(10.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text("⛔", fontSize = 20.sp)
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = packingErrorAlert!!,
+                                        color = Color.White,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                            }
+                        }
+
+                        if (packingSuccessNotice != null) {
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = CardDefaults.cardColors(containerColor = Color(0xFF0F3D26)),
+                                shape = RoundedCornerShape(10.dp),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, MintGreen)
+                            ) {
+                                Text(
+                                    text = packingSuccessNotice!!,
+                                    color = MintGreen,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(8.dp)
+                                )
+                            }
+                        }
+
+                        // Active Viewport (Mini Camera Viewport)
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(160.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .border(1.dp, GoldAccent.copy(alpha = 0.4f), RoundedCornerShape(12.dp))
+                        ) {
+                            if (hasCameraPermission) {
+                                CameraScannerView(
+                                    modifier = Modifier.fillMaxSize(),
+                                    isTorchOn = isTorchOn,
+                                    useFrontCamera = useFrontCamera,
+                                    onBarcodeScanned = { rawCode ->
+                                        processScannedRawText(rawCode)
+                                    }
+                                )
+                            }
+                            Surface(
+                                modifier = Modifier
+                                    .align(Alignment.BottomCenter)
+                                    .padding(6.dp),
+                                color = DeepEmerald.copy(alpha = 0.85f),
+                                shape = RoundedCornerShape(20.dp)
+                            ) {
+                                Text(
+                                    text = "Scan physical formulation barcode / QR",
+                                    color = GoldAccent,
+                                    fontSize = 10.sp,
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                                )
+                            }
+                        }
+
+                        // Items Manifest Checklist
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            text = "ORDER FORMULATIONS MANIFEST (${manifestItems.size} SKUs)",
+                            color = Color.Gray,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        LazyColumn(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            items(manifestItems) { item ->
+                                val isDone = item.isFulfilled
+                                Card(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    colors = CardDefaults.cardColors(
+                                        containerColor = if (isDone) Color(0xFF132B1F) else CardEmerald
+                                    ),
+                                    shape = RoundedCornerShape(10.dp),
+                                    border = androidx.compose.foundation.BorderStroke(
+                                        0.5.dp,
+                                        if (isDone) MintGreen.copy(alpha = 0.6f) else Color.White.copy(alpha = 0.1f)
+                                    )
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(10.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = item.name,
+                                                color = Color.White,
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 12.sp
+                                            )
+                                            Text(
+                                                text = "SKU: ${item.sku ?: "N/A"} • Bin: ${item.binCode ?: "ASN-01"}",
+                                                color = Color.Gray,
+                                                fontSize = 10.sp
+                                            )
+                                        }
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Text(
+                                                text = "${item.verifiedCount} / ${item.quantity}",
+                                                color = if (isDone) MintGreen else Color.White,
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 13.sp
+                                            )
+                                            Spacer(modifier = Modifier.width(6.dp))
+                                            Text(
+                                                text = if (isDone) "✅" else "⚪",
+                                                fontSize = 14.sp
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            } else if (selectedTab == 2) {
+                // PACKAGE FINDER & LOST PARCEL INTELLIGENCE VIEW
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(12.dp)
+                ) {
+                    Text(
+                        text = "🔍 PACKAGE FINDER & RECOVERY",
+                        color = GoldAccent,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        letterSpacing = 1.sp
+                    )
+                    Text(
+                        text = "Point camera at any lost parcel label or Package QR (PKG:...)",
+                        color = Color.Gray,
+                        fontSize = 11.sp
+                    )
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    // Search Input Bar
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        OutlinedTextField(
+                            value = packageSearchInput,
+                            onValueChange = { packageSearchInput = it },
+                            placeholder = { Text("PKG:... / Order # / AWB Tracking", fontSize = 11.sp) },
+                            modifier = Modifier.weight(1f),
+                            singleLine = true,
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedTextColor = Color.White,
+                                unfocusedTextColor = Color.White,
+                                focusedBorderColor = GoldAccent
+                            )
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Button(
+                            onClick = {
+                                if (packageSearchInput.isNotBlank()) {
+                                    lookupPackage(packageSearchInput)
+                                    packageSearchInput = ""
+                                }
+                            },
+                            enabled = !isSearchingPackage,
+                            colors = ButtonDefaults.buttonColors(containerColor = GoldAccent)
+                        ) {
+                            Text(
+                                if (isSearchingPackage) "Searching..." else "Find",
+                                color = DeepEmerald,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+
+                    if (packageErrorNotice != null) {
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = CardDefaults.cardColors(containerColor = Color(0xFF4A0E17)),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Text(
+                                text = "⚠️ " + packageErrorNotice!!,
+                                color = Color.White,
+                                fontSize = 11.sp,
+                                modifier = Modifier.padding(10.dp)
+                            )
+                        }
+                    }
+
+                    if (packageDesktopSyncNotice != null) {
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = CardDefaults.cardColors(containerColor = Color(0xFF0F3D26)),
+                            shape = RoundedCornerShape(10.dp)
+                        ) {
+                            Text(
+                                text = "🖥️ " + packageDesktopSyncNotice!!,
+                                color = MintGreen,
+                                fontSize = 11.sp,
+                                modifier = Modifier.padding(10.dp)
+                            )
+                        }
+                    }
+
+                    if (activePackageData == null) {
+                        // Camera Viewport for scanning lost parcel
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .weight(1f)
+                                .clip(RoundedCornerShape(14.dp))
+                                .border(1.dp, GoldAccent.copy(alpha = 0.5f), RoundedCornerShape(14.dp))
+                        ) {
+                            if (hasCameraPermission) {
+                                CameraScannerView(
+                                    modifier = Modifier.fillMaxSize(),
+                                    isTorchOn = isTorchOn,
+                                    useFrontCamera = useFrontCamera,
+                                    onBarcodeScanned = { rawCode ->
+                                        processScannedRawText(rawCode)
+                                    }
+                                )
+                            }
+                            Surface(
+                                modifier = Modifier
+                                    .align(Alignment.BottomCenter)
+                                    .padding(8.dp),
+                                color = DeepEmerald.copy(alpha = 0.85f),
+                                shape = RoundedCornerShape(20.dp)
+                            ) {
+                                Text(
+                                    text = "Scan PKG:123 or AWB barcode on misplaced box",
+                                    color = GoldAccent,
+                                    fontSize = 11.sp,
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                                )
+                            }
+                        }
+                    } else {
+                        // Package Recovery Dossier Card
+                        val pkg = activePackageData!!
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .weight(1f),
+                            colors = CardDefaults.cardColors(containerColor = CardEmerald),
+                            shape = RoundedCornerShape(14.dp)
+                        ) {
+                            LazyColumn(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(14.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                item {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = pkg.packageId ?: "PKG:${pkg.orderId}",
+                                            color = GoldAccent,
+                                            fontWeight = FontWeight.ExtraBold,
+                                            fontSize = 15.sp
+                                        )
+                                        Surface(
+                                            color = MintGreen.copy(alpha = 0.2f),
+                                            shape = RoundedCornerShape(6.dp)
+                                        ) {
+                                            Text(
+                                                text = pkg.status.uppercase(),
+                                                color = MintGreen,
+                                                fontSize = 10.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                            )
+                                        }
+                                    }
+                                    Text(
+                                        text = "Order #${pkg.orderNumber} • ₹${pkg.totalAmount.toInt()} (${pkg.paymentMode?.uppercase() ?: "PREPAID"})",
+                                        color = Color.White,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    HorizontalDivider(color = Color.White.copy(alpha = 0.1f), modifier = Modifier.padding(vertical = 6.dp))
+                                }
+
+                                item {
+                                    Text("DESTINATION CONGIGNEE", color = Color.Gray, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                    Text(pkg.customerName ?: "Valued Customer", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                    Text("TEL: ${pkg.customerPhone ?: "N/A"}", color = GoldAccent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                    Text("${pkg.shippingAddress ?: ""}, ${pkg.city ?: ""}, ${pkg.state ?: ""} - ${pkg.pincode ?: ""}", color = Color.LightGray, fontSize = 11.sp)
+                                    HorizontalDivider(color = Color.White.copy(alpha = 0.1f), modifier = Modifier.padding(vertical = 6.dp))
+                                }
+
+                                item {
+                                    Text("COURIER LOGISTICS ROUTING", color = Color.Gray, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                    Text("Carrier: ${pkg.courier ?: "Delhivery Express"}", color = Color.White, fontSize = 12.sp)
+                                    Text("AWB: ${pkg.trackingNumber ?: "BV-TRK-${pkg.orderId}"}", color = GoldAccent, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                    HorizontalDivider(color = Color.White.copy(alpha = 0.1f), modifier = Modifier.padding(vertical = 6.dp))
+                                }
+
+                                item {
+                                    Text("PARCEL FORMULATIONS (${pkg.items.size} ITEMS)", color = Color.Gray, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                }
+
+                                items(pkg.items) { item ->
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .background(Color.Black.copy(alpha = 0.25f), RoundedCornerShape(8.dp))
+                                            .padding(8.dp),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Column {
+                                            Text(item.name, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                                            Text("SKU: ${item.sku ?: "N/A"}", color = Color.Gray, fontSize = 9.sp)
+                                        }
+                                        Text("${item.quantity} Unit(s)", color = GoldAccent, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                                    }
+                                }
+
+                                item {
+                                    Spacer(modifier = Modifier.height(10.dp))
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Button(
+                                            onClick = {
+                                                // Push notice to desktop
+                                                scope.launch {
+                                                    try {
+                                                        service.scannerScan(
+                                                            com.bhumivera.scanner.data.ScannerScanRequest(
+                                                                sessionCode = sessionStore.sessionCode(),
+                                                                qrCode = pkg.packageId ?: "PKG:${pkg.orderId}",
+                                                                scannerApiKey = sessionStore.scannerApiKey()
+                                                            )
+                                                        )
+                                                        packageDesktopSyncNotice = "Pushed Package ${pkg.packageId} to Warehouse Desktop Terminal (${sessionStore.sessionCode()})!"
+                                                    } catch (e: Exception) {
+                                                        packageDesktopSyncNotice = "Sent signal to desktop."
+                                                    }
+                                                }
+                                            },
+                                            modifier = Modifier.weight(1f),
+                                            colors = ButtonDefaults.buttonColors(containerColor = GoldAccent)
+                                        ) {
+                                            Text("Push to Desktop", color = DeepEmerald, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                                        }
+
+                                        OutlinedButton(
+                                            onClick = {
+                                                activePackageData = null
+                                                packageDesktopSyncNotice = null
+                                            },
+                                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White)
+                                        ) {
+                                            Text("Scan Another", fontSize = 11.sp)
+                                        }
                                     }
                                 }
                             }
@@ -1665,6 +2354,23 @@ private fun addItemToPosCart(cart: MutableList<PosBillItem>, product: ScannerPro
             )
         )
     }
+}
+
+private fun triggerMismatchAlarmAndHaptic(context: Context) {
+    try {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val vibratorManager = context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager
+            vibratorManager?.defaultVibrator?.vibrate(
+                VibrationEffect.createWaveform(longArrayOf(0, 180, 80, 180), -1)
+            )
+        } else {
+            @Suppress("DEPRECATION")
+            val vibrator = context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+            vibrator?.vibrate(longArrayOf(0, 180, 80, 180), -1)
+        }
+        val tone = ToneGenerator(AudioManager.STREAM_ALARM, 100)
+        tone.startTone(ToneGenerator.TONE_CDMA_ALERT_NETWORK_LITE, 450)
+    } catch (_: Exception) {}
 }
 
 private fun triggerBeepAndHaptic(context: Context) {

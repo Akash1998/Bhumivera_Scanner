@@ -85,6 +85,17 @@ interface BhumiveraService {
     @POST("inventory-software/pos/checkout")
     suspend fun posCheckout(@Body request: PosCheckoutRequest): PosCheckoutResponse
 
+    // Guided Order Packing Station
+    @GET("inventory-software/orders/{id}/manifest")
+    suspend fun orderManifest(@Path("id") id: Int): OrderManifestResponse
+
+    @POST("inventory-software/fulfillment/verify-pack")
+    suspend fun verifyPack(@Body request: VerifyPackRequest): VerifyPackResponse
+
+    // Lost Package Finder & Parcel Intelligence
+    @GET("inventory-software/package/lookup")
+    suspend fun packageLookup(@Query("code") code: String): PackageLookupResponse
+
     companion object {
         fun create(sessionStore: SessionStore): BhumiveraService {
             val authInterceptor = Interceptor { chain ->
