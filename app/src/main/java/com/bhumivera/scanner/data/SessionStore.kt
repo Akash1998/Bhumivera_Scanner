@@ -55,16 +55,46 @@ class SessionStore(context: Context) {
         preferences.edit(commit = true) { putBoolean(AUTO_ADD_KEY, enabled) }
     }
 
+    fun pairedAt(): Long = preferences.getLong(PAIRED_AT_KEY, 0L)
+
+    fun savePairedAt(time: Long) {
+        preferences.edit(commit = true) { putLong(PAIRED_AT_KEY, time) }
+    }
+
+    fun expiresAt(): Long {
+        val stored = preferences.getLong(EXPIRES_AT_KEY, 0L)
+        if (stored > 0L) return stored
+        // Default: 90 days from pairedAt or now
+        val base = if (pairedAt() > 0L) pairedAt() else System.currentTimeMillis()
+        return base + NINETY_DAYS_MILLIS
+    }
+
+    fun saveExpiresAt(time: Long) {
+        preferences.edit(commit = true) { putLong(EXPIRES_AT_KEY, time) }
+    }
+
+    fun daysRemaining(): Int {
+        val exp = expiresAt()
+        val now = System.currentTimeMillis()
+        if (exp <= now) return 0
+        return ((exp - now) / (24 * 3600 * 1000L)).coerceAtLeast(0L).toInt()
+    }
+
+    fun isSessionExpired(): Boolean = System.currentTimeMillis() > expiresAt()
+
     fun clear() {
         preferences.edit(commit = true) { clear() }
     }
 
     companion object {
         const val DEFAULT_SCANNER_KEY = "BV-SCAN-34F204D93552CF7D3A398568"
+        const val NINETY_DAYS_MILLIS = 90L * 24 * 3600 * 1000L
         private const val TOKEN_KEY = "customer_token"
         private const val SCANNER_KEY = "scanner_api_key"
         private const val BACKEND_URL_KEY = "scanner_backend_url"
         private const val SESSION_CODE_KEY = "scanner_session_code"
         private const val AUTO_ADD_KEY = "scanner_auto_add_mode"
+        private const val PAIRED_AT_KEY = "scanner_paired_at"
+        private const val EXPIRES_AT_KEY = "scanner_expires_at"
     }
 }

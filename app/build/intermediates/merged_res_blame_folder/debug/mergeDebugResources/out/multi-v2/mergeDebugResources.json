@@ -2632,25 +2632,6 @@
                     }
                 },
                 {
-                    "source": "C:\\Users\\akash\\OneDrive\\Documents\\GitHub\\Bhumivera_Scanner\\app\\src\\main\\res\\values\\styles.xml",
-                    "from": {
-                        "startLines": "2",
-                        "startColumns": "4",
-                        "startOffsets": "57",
-                        "endLines": "8",
-                        "endColumns": "12",
-                        "endOffsets": "462"
-                    },
-                    "to": {
-                        "startLines": "499",
-                        "startColumns": "4",
-                        "startOffsets": "33105",
-                        "endLines": "505",
-                        "endColumns": "12",
-                        "endOffsets": "33504"
-                    }
-                },
-                {
                     "source": "C:\\Users\\akash\\.gradle\\caches\\8.13\\transforms\\285dd6a784690466c08ca4e994490e24\\transformed\\savedstate-release\\res\\values\\values.xml",
                     "from": {
                         "startLines": "2",
@@ -2790,6 +2771,25 @@
                         "endLines": "3112,3118,3124,3127,3138",
                         "endColumns": "24,24,24,24,24",
                         "endOffsets": "173286,173530,173777,173910,174322"
+                    }
+                },
+                {
+                    "source": "C:\\Users\\akash\\OneDrive\\Documents\\BHUMIVERA\\Bhumivera_Scanner\\app\\src\\main\\res\\values\\styles.xml",
+                    "from": {
+                        "startLines": "2",
+                        "startColumns": "4",
+                        "startOffsets": "57",
+                        "endLines": "8",
+                        "endColumns": "12",
+                        "endOffsets": "462"
+                    },
+                    "to": {
+                        "startLines": "499",
+                        "startColumns": "4",
+                        "startOffsets": "33105",
+                        "endLines": "505",
+                        "endColumns": "12",
+                        "endOffsets": "33504"
                     }
                 },
                 {

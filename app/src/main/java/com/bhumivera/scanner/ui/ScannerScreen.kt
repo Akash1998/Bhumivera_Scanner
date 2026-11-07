@@ -254,20 +254,24 @@ fun ScannerScreen(
                         sessionStore.saveBackendUrl(base)
                     }
                 }
+                sessionStore.savePairedAt(System.currentTimeMillis())
+                sessionStore.saveExpiresAt(System.currentTimeMillis() + SessionStore.NINETY_DAYS_MILLIS)
                 triggerBeepAndHaptic(context)
-                pairingSuccessMessage = "Successfully Paired with Asansol POS Terminal!\n\nScanner API Key: " + sessionStore.scannerApiKey() + "\nSession Code: " + sessionStore.sessionCode() + "\nEndpoint: " + sessionStore.backendUrl() + "\n\nNow point your camera at any product QR code or barcode to scan and bill!"
+                pairingSuccessMessage = "Successfully Paired with Warehouse Dock Station!\n\nStation: " + sessionStore.sessionCode() + "\nToken Validity: 90 Days Active (" + sessionStore.daysRemaining() + " days remaining)\nScanner API Key: " + sessionStore.scannerApiKey() + "\nEndpoint: " + sessionStore.backendUrl() + "\n\nNow point camera at product batch QR stickers or barcodes to pick, pack, and bill!"
                 showPairingSuccessDialog = true
-                statusMessage = "🟢 Paired with Asansol POS Terminal!"
+                statusMessage = "🟢 Station Linked: " + sessionStore.sessionCode() + " (90d Active)"
                 return
             } catch (_: Exception) {}
         }
 
         if (clean.startsWith("BV-SCAN-")) {
             sessionStore.saveScannerApiKey(clean)
+            sessionStore.savePairedAt(System.currentTimeMillis())
+            sessionStore.saveExpiresAt(System.currentTimeMillis() + SessionStore.NINETY_DAYS_MILLIS)
             triggerBeepAndHaptic(context)
-            pairingSuccessMessage = "Successfully Paired with Asansol POS Terminal!\n\nScanner API Key: " + clean + "\nSession Code: " + sessionStore.sessionCode() + "\nEndpoint: " + sessionStore.backendUrl() + "\n\nNow point your camera at any product QR code or barcode to scan and bill!"
+            pairingSuccessMessage = "Successfully Paired with Warehouse Dock Station!\n\nScanner API Key: " + clean + "\nToken Validity: 90 Days Active (" + sessionStore.daysRemaining() + " days remaining)\nStation: " + sessionStore.sessionCode() + "\nEndpoint: " + sessionStore.backendUrl() + "\n\nNow point camera at product batch QR stickers or barcodes to pick, pack, and bill!"
             showPairingSuccessDialog = true
-            statusMessage = "🟢 Paired with Scanner Key: " + clean
+            statusMessage = "🟢 Station Linked with Key: " + clean
             return
         }
 
@@ -384,9 +388,22 @@ fun ScannerScreen(
                                 shape = RoundedCornerShape(4.dp)
                             ) {
                                 Text(
-                                    text = "SCANNER POS",
+                                    text = "2.0 HIGH SPEED",
                                     color = MintGreen,
-                                    fontSize = 10.sp,
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Surface(
+                                color = Color(0xFF0F766E).copy(alpha = 0.35f),
+                                shape = RoundedCornerShape(4.dp)
+                            ) {
+                                Text(
+                                    text = "${sessionStore.daysRemaining()}d Left",
+                                    color = Color(0xFF5EEAD4),
+                                    fontSize = 9.sp,
                                     fontWeight = FontWeight.Bold,
                                     modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
                                 )
@@ -1447,6 +1464,24 @@ private fun resolveFromLocalCache(
     if (clean.isBlank()) return null
 
     var candidate = clean.lowercase()
+    var parsedBatch: String? = null
+
+    // Check Bhumivera Batch QR: BV:<SKU>:<BATCH> or BV|<SKU>|<BATCH>
+    if (clean.startsWith("BV:", ignoreCase = true) || clean.startsWith("BV|", ignoreCase = true)) {
+        val parts = clean.split(":", "|").map { it.trim() }
+        if (parts.size >= 2) {
+            candidate = parts[1].lowercase()
+            if (parts.size >= 3) {
+                parsedBatch = parts[2]
+            }
+        }
+    } else if (clean.startsWith("{") && clean.endsWith("}")) {
+        try {
+            val j = org.json.JSONObject(clean)
+            if (j.has("sku")) candidate = j.optString("sku").lowercase()
+            if (j.has("batch")) parsedBatch = j.optString("batch")
+        } catch (_: Exception) {}
+    }
 
     // Extract query parameters if URL
     if (clean.startsWith("http://") || clean.startsWith("https://") || clean.contains("bhumivera.com")) {
@@ -1471,12 +1506,18 @@ private fun resolveFromLocalCache(
     lookupMap[candidate]?.let { return it }
 
     // Fuzzy match in catalog
-    return catalog.firstOrNull {
+    val direct = lookupMap[candidate] ?: catalog.firstOrNull {
         it.displaySku.equals(candidate, ignoreCase = true) ||
         it.displayBarcode.equals(candidate, ignoreCase = true) ||
         it.name.contains(candidate, ignoreCase = true) ||
-        (it.slug != null && it.slug.equals(candidate, ignoreCase = true))
+        (it.slug != null && it.slug.equals(candidate, ignoreCase = true)) ||
+        (it.batchNo != null && it.batchNo.equals(candidate, ignoreCase = true))
     }
+
+    if (direct != null && !parsedBatch.isNullOrBlank()) {
+        return direct.copy(batchNo = parsedBatch, batchNoAlt = parsedBatch)
+    }
+    return direct
 }
 
 private fun indexProductsIntoMap(items: List<ScannerProduct>, map: MutableMap<String, ScannerProduct>) {
