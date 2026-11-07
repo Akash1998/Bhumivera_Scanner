@@ -87,7 +87,7 @@ interface BhumiveraService {
 
     // Guided Order Packing Station
     @GET("inventory-software/orders/{id}/manifest")
-    suspend fun orderManifest(@Path("id") id: Int): OrderManifestResponse
+    suspend fun orderManifest(@Path("id") id: String): OrderManifestResponse
 
     @POST("inventory-software/fulfillment/verify-pack")
     suspend fun verifyPack(@Body request: VerifyPackRequest): VerifyPackResponse

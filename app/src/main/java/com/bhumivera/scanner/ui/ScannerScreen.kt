@@ -90,6 +90,7 @@ import com.bhumivera.scanner.data.ScannerQueueItemRequest
 import com.bhumivera.scanner.data.ScannerQueueRemoveRequest
 import com.bhumivera.scanner.data.ScannerScanRequest
 import com.bhumivera.scanner.data.SessionStore
+import com.bhumivera.scanner.data.VerifyPackRequest
 import com.bhumivera.scanner.scanner.CameraScannerView
 import com.bhumivera.scanner.scanner.QrCodeGenerator
 import kotlinx.coroutines.Dispatchers
@@ -258,9 +259,8 @@ fun ScannerScreen(
             .removePrefix("BV-ORD-")
             .removePrefix("#")
             .trim()
-        val orderId = raw.toIntOrNull()
-        if (orderId == null || orderId <= 0) {
-            packingErrorAlert = "Invalid Order ID: '$orderIdOrCode'. Please scan a valid order QR (e.g. ORD:123456)."
+        if (raw.isBlank()) {
+            packingErrorAlert = "Invalid Order ID: '$orderIdOrCode'. Please scan a valid order QR (e.g. ORD:2 or #836027704)."
             triggerMismatchAlarmAndHaptic(context)
             return
         }
@@ -270,7 +270,7 @@ fun ScannerScreen(
         packingSuccessNotice = null
         scope.launch {
             try {
-                val res = service.orderManifest(orderId)
+                val res = service.orderManifest(raw)
                 if (res.success && res.order != null) {
                     activeOrder = res.order
                     manifestItems.clear()
@@ -280,14 +280,104 @@ fun ScannerScreen(
                     selectedTab = 1
                 } else {
                     triggerMismatchAlarmAndHaptic(context)
-                    packingErrorAlert = res.message ?: "Order #$orderId not found in manifest database."
+                    packingErrorAlert = res.message ?: "Order '$raw' not found in manifest database."
                 }
             } catch (e: Exception) {
                 triggerMismatchAlarmAndHaptic(context)
-                packingErrorAlert = "Failed to load manifest for Order #$orderId: ${e.message}"
+                packingErrorAlert = "Failed to load manifest for Order '$raw': ${e.message}"
             } finally {
                 isLoadingManifest = false
             }
+        }
+    }
+
+    // High-Accuracy Item Verification against Active Order Manifest
+    fun verifyPackingBarcode(scannedCode: String) {
+        val order = activeOrder
+        if (order == null) {
+            loadOrderManifest(scannedCode)
+            return
+        }
+        val clean = scannedCode.trim()
+        if (clean.isBlank()) return
+
+        // If operator scans another order token, switch orders
+        if (clean.startsWith("ORD:") || clean.startsWith("ord:") || clean.startsWith("BV-ORD-")) {
+            loadOrderManifest(clean)
+            return
+        }
+
+        // Dual-purpose QR URL decode: https://bhumivera.com/verify?code=BV:BV-LUX-CFW-01:BVBATCH-2026-1664
+        var extractedCode = clean
+        if (extractedCode.contains("code=")) {
+            extractedCode = extractedCode.substringAfter("code=").substringBefore("&")
+            try {
+                extractedCode = java.net.URLDecoder.decode(extractedCode, StandardCharsets.UTF_8.name())
+            } catch (_: Exception) {}
+        }
+        var candidateSku = extractedCode
+        if (candidateSku.startsWith("BV:")) {
+            val parts = candidateSku.split(":")
+            if (parts.size >= 2) {
+                candidateSku = parts[1].trim()
+            }
+        }
+
+        val cached = resolveFromLocalCache(clean, localLookupMap, localCatalog)
+            ?: resolveFromLocalCache(candidateSku, localLookupMap, localCatalog)
+
+        val resolvedSku = cached?.sku ?: candidateSku
+        val resolvedName = cached?.name ?: clean
+
+        val itemIndex = manifestItems.indexOfFirst { item ->
+            item.sku.equals(resolvedSku, ignoreCase = true) ||
+            item.sku.equals(candidateSku, ignoreCase = true) ||
+            item.barcode.equals(clean, ignoreCase = true) ||
+            item.barcode.equals(candidateSku, ignoreCase = true) ||
+            (item.name.isNotBlank() && resolvedName.isNotBlank() && (
+                item.name.contains(resolvedName, ignoreCase = true) ||
+                resolvedName.contains(item.name, ignoreCase = true)
+            ))
+        }
+
+        if (itemIndex >= 0) {
+            val target = manifestItems[itemIndex]
+            if (target.verifiedCount >= target.quantity) {
+                triggerBeepAndHaptic(context)
+                packingSuccessNotice = "✔ ${target.name} is already fully packed (${target.verifiedCount}/${target.quantity})."
+                packingErrorAlert = null
+                return
+            }
+
+            val updated = target.copy(verifiedCount = target.verifiedCount + 1)
+            manifestItems[itemIndex] = updated
+            triggerBeepAndHaptic(context)
+            packingErrorAlert = null
+
+            val totalUnits = manifestItems.sumOf { it.quantity }
+            val totalVerified = manifestItems.sumOf { it.verifiedCount }
+            if (totalVerified >= totalUnits && totalUnits > 0) {
+                packingSuccessNotice = "🎉 ALL $totalUnits ITEMS PACKED! Order Ready for Shipping Label."
+            } else {
+                packingSuccessNotice = "✔ Packed: ${target.name} (${updated.verifiedCount}/${target.quantity})"
+            }
+
+            scope.launch {
+                try {
+                    service.verifyPack(
+                        VerifyPackRequest(
+                            orderId = order.id.toString(),
+                            barcode = clean,
+                            scannerApiKey = sessionStore.scannerApiKey()
+                        )
+                    )
+                } catch (_: Exception) {}
+            }
+        } else {
+            triggerMismatchAlarmAndHaptic(context)
+            packingSuccessNotice = null
+            packingErrorAlert = "⛔ MISPICK REJECTED!\n\nScanned \"$resolvedName\" does NOT belong to Order #${order.orderNumber} (${order.customerName})!\n\nDo NOT pack this item into the parcel!"
+            statusMessage = "⛔ Mispick Rejected: $resolvedName"
         }
     }
 
@@ -364,7 +454,34 @@ fun ScannerScreen(
             return
         }
 
-        // 2. INSTANT 0ms IN-MEMORY RESOLUTION (Matches URLs, SKUs, Slugs, Barcodes)
+        // 2. ORDER MANIFEST RECOGNITION (ORD:... or BV-ORD-... or when on Packing tab with activeOrder == null and numeric)
+        if (clean.startsWith("ORD:") || clean.startsWith("ord:") || clean.startsWith("BV-ORD-") ||
+            (selectedTab == 1 && activeOrder == null && clean.matches(Regex("""^\d{1,12}$""")))) {
+            loadOrderManifest(clean)
+            return
+        }
+
+        // 3. PACKAGE FINDER TOKEN RECOGNITION (PKG:... or BV-PKG-...)
+        if (clean.startsWith("PKG:") || clean.startsWith("pkg:") || clean.startsWith("BV-PKG-")) {
+            lookupPackage(clean)
+            return
+        }
+
+        // 4. ACTIVE ORDER PACKING VERIFICATION
+        // If user is currently in the Packing Tab and has an active order manifest open:
+        if (selectedTab == 1 && activeOrder != null) {
+            verifyPackingBarcode(clean)
+            return
+        }
+
+        // 5. PACKAGE FINDER ACTIVE LOOKUP
+        // If user is currently in the Package Finder Tab:
+        if (selectedTab == 2) {
+            lookupPackage(clean)
+            return
+        }
+
+        // 6. INSTANT 0ms IN-MEMORY RESOLUTION (Matches URLs, SKUs, Slugs, Barcodes)
         val matched = resolveFromLocalCache(clean, localLookupMap, localCatalog)
         if (matched != null) {
             triggerBeepAndHaptic(context)

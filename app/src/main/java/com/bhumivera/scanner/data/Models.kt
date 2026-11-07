@@ -288,6 +288,7 @@ data class OrderManifestItem(
     val id: Int? = null,
     @SerializedName("productId") val productId: Int? = null,
     val sku: String? = null,
+    val barcode: String? = null,
     val name: String = "",
     val quantity: Int = 1,
     val price: Double = 0.0,
@@ -299,7 +300,7 @@ data class OrderManifestItem(
 }
 
 data class VerifyPackRequest(
-    val orderId: Int,
+    val orderId: String,
     val barcode: String,
     val scannerApiKey: String? = null,
 )
