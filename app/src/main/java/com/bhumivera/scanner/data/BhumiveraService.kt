@@ -130,6 +130,19 @@ interface BhumiveraService {
     @GET("inventory-software/package/lookup")
     suspend fun packageLookup(@Query("code") code: String): PackageLookupResponse
 
+
+    @POST("inventory-software/scanner/auth/login")
+    suspend fun staffLogin(@Body request: StaffLoginRequest): StaffLoginResponse
+
+    @POST("inventory-software/workroom/toggle-work")
+    suspend fun toggleWorkroom(@Body request: WorkroomToggleRequest): ApiEnvelope<Map<String, Any>>
+
+    @GET("inventory-software/workroom/presence")
+    suspend fun workroomPresence(): WorkroomPresenceResponse
+
+    @POST("inventory-software/fulfillment/batch-push")
+    suspend fun batchPushOrders(@Body request: BatchPushRequest): BatchPushResponse
+
     companion object {
         fun create(sessionStore: SessionStore): BhumiveraService {
             val authInterceptor = Interceptor { chain ->

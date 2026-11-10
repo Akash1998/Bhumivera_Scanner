@@ -164,6 +164,12 @@ fun ScannerScreen(
     var statusMessage by remember { mutableStateOf("Ready to scan QR / Barcodes") }
 
     // ----------------------------------------------------
+    // STACKED ORDERS QUEUE (OFFLINE-FIRST PHONE STORAGE)
+    // ----------------------------------------------------
+    val stackedOrders = remember { mutableStateListOf<com.bhumivera.scanner.data.StackedOrderRecord>() }
+    var isPushingStack by remember { mutableStateOf(false) }
+
+    // ----------------------------------------------------
     // GUIDED ORDER PACKING STATION STATE (ZERO-MISPICK)
     // ----------------------------------------------------
     var activeOrder by remember { mutableStateOf<com.bhumivera.scanner.data.OrderManifestOrder?>(null) }
@@ -226,6 +232,7 @@ fun ScannerScreen(
         seedDefaultLuxuryProducts(localCatalog, localLookupMap)
         try {
             posDrafts.addAll(sessionStore.loadPosDrafts())
+            stackedOrders.addAll(sessionStore.loadStackedOrders())
         } catch (e: Exception) {
             draftStorageError = "Saved drafts could not be loaded: ${e.message ?: "storage error"}"
         }
@@ -559,6 +566,104 @@ fun ScannerScreen(
             packingSuccessNotice = null
             packingErrorAlert = "⛔ MISPICK REJECTED!\n\nScanned \"$resolvedName\" does NOT belong to Order #${order.orderNumber} (${order.customerName})!\n\nDo NOT pack this item into the parcel!"
             statusMessage = "⛔ Mispick Rejected: $resolvedName"
+        }
+    }
+
+    fun pauseActiveOrderPacking() {
+        val order = activeOrder ?: return
+        val pausedDraft = PosDraftOrder(
+            id = "PAUSED-${order.id}",
+            title = "Order #${order.orderNumber} · Paused",
+            customerName = order.customerName ?: "Customer",
+            customerPhone = order.customerPhone ?: "",
+            paymentMode = order.paymentMode ?: "COD",
+            items = manifestItems.map { it ->
+                PosBillItem(
+                    id = it.id ?: 0,
+                    productId = it.productId ?: 0,
+                    name = it.name,
+                    sku = it.sku ?: "SKU",
+                    barcode = it.barcode ?: "",
+                    quantity = it.quantity,
+                    price = it.price,
+                    mrp = it.price,
+                )
+            },
+            savedAt = System.currentTimeMillis(),
+            orderId = order.orderNumber,
+            status = "paused",
+            createdByName = sessionStore.operatorName(),
+        )
+        posDrafts.removeAll { it.id == pausedDraft.id }
+        posDrafts.add(0, pausedDraft)
+        sessionStore.savePosDrafts(posDrafts.toList())
+        activeOrder = null
+        manifestItems.clear()
+        packingSuccessNotice = null
+        packingErrorAlert = null
+        statusMessage = "⏸️ Order #${order.orderNumber} paused. Resume anytime from Drafts tab."
+        triggerBeepAndHaptic(context)
+    }
+
+    fun stackCompletedOrder() {
+        val order = activeOrder ?: return
+        val record = com.bhumivera.scanner.data.StackedOrderRecord(
+            orderId = order.id,
+            orderNumber = order.orderNumber,
+            customerName = order.customerName,
+            totalAmount = order.totalAmount,
+            items = manifestItems.toList(),
+            verifiedItems = manifestItems.map {
+                mapOf(
+                    "orderItemId" to (it.id ?: 0),
+                    "quantity" to it.quantity,
+                    "verifiedCount" to it.verifiedCount
+                )
+            },
+            packedAt = System.currentTimeMillis(),
+            packedBy = sessionStore.operatorName(),
+        )
+        stackedOrders.removeAll { it.orderId == record.orderId }
+        stackedOrders.add(0, record)
+        sessionStore.saveStackedOrders(stackedOrders.toList())
+        activeOrder = null
+        manifestItems.clear()
+        packingSuccessNotice = null
+        packingErrorAlert = null
+        statusMessage = "📦 Order #${record.orderNumber} stacked! Total stacked: ${stackedOrders.size} orders."
+        triggerBeepAndHaptic(context)
+    }
+
+    fun pushAllStackedOrdersToInventory() {
+        if (stackedOrders.isEmpty()) return
+        isPushingStack = true
+        scope.launch {
+            try {
+                val res = service.batchPushOrders(
+                    com.bhumivera.scanner.data.BatchPushRequest(
+                        stackedOrders = stackedOrders.toList(),
+                        operatorUsername = sessionStore.staffUsername(),
+                        operatorName = sessionStore.operatorName(),
+                        sessionCode = sessionStore.sessionCode(),
+                        scannerApiKey = sessionStore.scannerApiKey()
+                    )
+                )
+                if (res.success) {
+                    stackedOrders.clear()
+                    sessionStore.saveStackedOrders(emptyList())
+                    statusMessage = "🚀 Pushed ${res.count} stacked orders to Inventory Software!"
+                    packingSuccessNotice = "All stacked orders pushed and updated in inventory software!"
+                    triggerBeepAndHaptic(context)
+                } else {
+                    packingErrorAlert = res.message ?: "Failed to push stacked orders."
+                    triggerMismatchAlarmAndHaptic(context)
+                }
+            } catch (e: Exception) {
+                packingErrorAlert = "Failed to push stacked orders: ${e.message}"
+                triggerMismatchAlarmAndHaptic(context)
+            } finally {
+                isPushingStack = false
+            }
         }
     }
 
@@ -1681,7 +1786,7 @@ fun ScannerScreen(
                                         shape = RoundedCornerShape(6.dp)
                                     ) {
                                         Text(
-                                            text = if (isOrderComplete) "READY TO SEAL" else "PACKING IN PROGRESS",
+                                            text = if (isOrderComplete) "PACKED" else "PACKING",
                                             color = if (isOrderComplete) MintGreen else GoldAccent,
                                             fontSize = 10.sp,
                                             fontWeight = FontWeight.Bold,
@@ -1791,6 +1896,40 @@ fun ScannerScreen(
                                     fontSize = 10.sp,
                                     modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
                                 )
+                            }
+                        }
+
+                        if (isOrderComplete) {
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = CardDefaults.cardColors(containerColor = Color(0xFF0F3D26)),
+                                shape = RoundedCornerShape(12.dp),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, MintGreen)
+                            ) {
+                                Column(modifier = Modifier.padding(10.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Text("🎉 100% ITEMS VERIFIED & PACKED!", color = MintGreen, fontWeight = FontWeight.ExtraBold, fontSize = 12.sp)
+                                    Spacer(modifier = Modifier.height(6.dp))
+                                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        Button(
+                                            onClick = { stackCompletedOrder() },
+                                            modifier = Modifier.weight(1f),
+                                            colors = ButtonDefaults.buttonColors(containerColor = GoldAccent)
+                                        ) {
+                                            Text("➕ Stack & Next Order", color = DeepEmerald, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                                        }
+                                        Button(
+                                            onClick = {
+                                                stackCompletedOrder()
+                                                pushAllStackedOrdersToInventory()
+                                            },
+                                            modifier = Modifier.weight(1f),
+                                            colors = ButtonDefaults.buttonColors(containerColor = MintGreen)
+                                        ) {
+                                            Text("🚀 Push to Inventory", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                                        }
+                                    }
+                                }
                             }
                         }
 
@@ -2782,6 +2921,8 @@ fun ScannerScreen(
         var tempKey by remember { mutableStateOf(sessionStore.scannerApiKey()) }
         var tempSession by remember { mutableStateOf(sessionStore.sessionCode()) }
         var tempAutoAdd by remember { mutableStateOf(sessionStore.isAutoAddMode()) }
+        var staffUser by remember { mutableStateOf(sessionStore.staffUsername().ifBlank { "akash" }) }
+        var staffPass by remember { mutableStateOf("") }
         var pingStatus by remember { mutableStateOf("") }
 
         AlertDialog(
@@ -2824,6 +2965,66 @@ fun ScannerScreen(
                             unfocusedTextColor = Color.White
                         )
                     )
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Text("Staff Login (Login ID & Password)", color = GoldAccent, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        OutlinedTextField(
+                            value = staffUser,
+                            onValueChange = { staffUser = it },
+                            label = { Text("Username", fontSize = 10.sp) },
+                            modifier = Modifier.weight(1f),
+                            singleLine = true,
+                            colors = OutlinedTextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.White)
+                        )
+                        OutlinedTextField(
+                            value = staffPass,
+                            onValueChange = { staffPass = it },
+                            label = { Text("Password", fontSize = 10.sp) },
+                            modifier = Modifier.weight(1f),
+                            singleLine = true,
+                            colors = OutlinedTextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.White)
+                        )
+                    }
+                    if (staffPass.isNotBlank()) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Button(
+                            onClick = {
+                                scope.launch {
+                                    pingStatus = "Signing in as $staffUser..."
+                                    try {
+                                        val loginRes = service.staffLogin(
+                                            com.bhumivera.scanner.data.StaffLoginRequest(
+                                                username = staffUser.trim(),
+                                                password = staffPass.trim()
+                                            )
+                                        )
+                                        if (loginRes.success && loginRes.staff != null) {
+                                            sessionStore.saveStaffUsername(loginRes.staff.username)
+                                            sessionStore.saveOperatorName(loginRes.staff.fullName)
+                                            if (!loginRes.sessionCode.isNullOrBlank()) {
+                                                sessionStore.saveSessionCode(loginRes.sessionCode)
+                                                tempSession = loginRes.sessionCode
+                                            }
+                                            if (!loginRes.token.isNullOrBlank()) {
+                                                sessionStore.saveStaffToken(loginRes.token)
+                                            }
+                                            pingStatus = "🟢 Signed in as ${loginRes.staff.fullName} (${loginRes.staff.role})"
+                                            isSessionActive = true
+                                            isApiConnected = true
+                                        } else {
+                                            pingStatus = "🔴 " + (loginRes.message ?: "Login failed")
+                                        }
+                                    } catch (e: Exception) {
+                                        pingStatus = "🔴 " + (apiFailureMessage(e) ?: e.message ?: "Login error")
+                                    }
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.buttonColors(containerColor = GoldAccent)
+                        ) {
+                            Text("Sign In Staff", color = DeepEmerald, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                        }
+                    }
                     Spacer(modifier = Modifier.height(10.dp))
                     Row(
                         verticalAlignment = Alignment.CenterVertically,

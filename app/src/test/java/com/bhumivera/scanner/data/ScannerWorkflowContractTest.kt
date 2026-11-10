@@ -3,6 +3,7 @@ package com.bhumivera.scanner.data
 import com.google.gson.Gson
 import com.google.gson.JsonParser
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ScannerWorkflowContractTest {
@@ -52,5 +53,33 @@ class ScannerWorkflowContractTest {
         val restored = Gson().fromJson(Gson().toJson(draft), PosDraftOrder::class.java)
 
         assertEquals(draft, restored)
+    }
+
+    @Test
+    fun stackedOrdersQueueSerializesCleanlyForBatchPush() {
+        val stacked = StackedOrderRecord(
+            orderId = 1234,
+            orderNumber = "1234",
+            customerName = "Valued Patron",
+            totalAmount = 598.0,
+            verifiedItems = listOf(
+                mapOf("orderItemId" to 10, "quantity" to 2, "verifiedCount" to 2)
+            ),
+            packedAt = 1_794_045_600_000L,
+            packedBy = "Akash",
+        )
+
+        val batchRequest = BatchPushRequest(
+            stackedOrders = listOf(stacked),
+            operatorUsername = "akash",
+            operatorName = "Akash",
+            sessionCode = "STAFF-AKASH",
+        )
+
+        val json = Gson().toJson(batchRequest)
+        val parsed = JsonParser.parseString(json).asJsonObject
+
+        assertEquals("STAFF-AKASH", parsed.get("sessionCode").asString)
+        assertEquals(1, parsed.getAsJsonArray("stackedOrders").size())
     }
 }

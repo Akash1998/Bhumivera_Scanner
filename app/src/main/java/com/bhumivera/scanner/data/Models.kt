@@ -443,3 +443,84 @@ data class PackageLookupData(
     val paymentMode: String? = null,
     val items: List<OrderManifestItem> = emptyList(),
 )
+
+data class StaffLoginRequest(
+    val username: String,
+    val password: String,
+    val deviceName: String = "Bombera Android Scanner App",
+)
+
+data class StaffPermissions(
+    val can_scan: Boolean = true,
+    val can_pack: Boolean = true,
+    val can_bill: Boolean = true,
+)
+
+data class StaffProfile(
+    val id: Int? = null,
+    val username: String = "",
+    val fullName: String = "",
+    val role: String = "cashier",
+    val assignedHub: String = "Bhumivera Flagship Hub — Asansol",
+    val permissions: StaffPermissions? = null,
+)
+
+data class StaffLoginResponse(
+    val success: Boolean = false,
+    val token: String? = null,
+    val sessionCode: String? = null,
+    val staff: StaffProfile? = null,
+    val message: String? = null,
+)
+
+data class WorkroomToggleRequest(
+    val onWork: Boolean = true,
+    val mode: String = "IDLE",
+    val activeOrder: String = "",
+    val deviceName: String = "Bombera Android Scanner App",
+    val operatorUsername: String? = null,
+    val operatorName: String? = null,
+    val sessionCode: String? = null,
+    val scannerApiKey: String? = null,
+)
+
+data class ActiveWorker(
+    val username: String = "",
+    val fullName: String = "",
+    val role: String = "",
+    val mode: String = "IDLE",
+    val activeOrder: String = "",
+    val sessionCode: String = "",
+    val lastSeenAt: String? = null,
+)
+
+data class WorkroomPresenceResponse(
+    val success: Boolean = false,
+    val count: Int = 0,
+    val activeWorkers: List<ActiveWorker> = emptyList(),
+)
+
+data class StackedOrderRecord(
+    val orderId: Int,
+    val orderNumber: String,
+    val customerName: String? = null,
+    val totalAmount: Double = 0.0,
+    val items: List<OrderManifestItem> = emptyList(),
+    val verifiedItems: List<Map<String, Any>> = emptyList(),
+    val packedAt: Long = System.currentTimeMillis(),
+    val packedBy: String = "Staff",
+)
+
+data class BatchPushRequest(
+    val stackedOrders: List<StackedOrderRecord> = emptyList(),
+    val operatorUsername: String? = null,
+    val operatorName: String? = null,
+    val sessionCode: String? = null,
+    val scannerApiKey: String? = null,
+)
+
+data class BatchPushResponse(
+    val success: Boolean = false,
+    val count: Int = 0,
+    val message: String? = null,
+)

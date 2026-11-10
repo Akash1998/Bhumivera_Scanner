@@ -50,6 +50,36 @@ class SessionStore(context: Context) {
         preferences.edit(commit = true) { putString(SESSION_CODE_KEY, code.trim()) }
     }
 
+
+    fun staffToken(): String? = preferences.getString(STAFF_TOKEN_KEY, null)
+
+    fun saveStaffToken(token: String) {
+        preferences.edit(commit = true) { putString(STAFF_TOKEN_KEY, token) }
+    }
+
+    fun staffUsername(): String = preferences.getString(STAFF_USERNAME_KEY, null).orEmpty()
+
+    fun saveStaffUsername(u: String) {
+        preferences.edit(commit = true) { putString(STAFF_USERNAME_KEY, u.trim()) }
+    }
+
+    fun isOnWork(): Boolean = preferences.getBoolean(IS_ON_WORK_KEY, true)
+
+    fun setIsOnWork(onWork: Boolean) {
+        preferences.edit(commit = true) { putBoolean(IS_ON_WORK_KEY, onWork) }
+    }
+
+    fun loadStackedOrders(): List<StackedOrderRecord> {
+        val json = preferences.getString(STACKED_ORDERS_KEY, null) ?: return emptyList()
+        val type = object : TypeToken<List<StackedOrderRecord>>() {}.type
+        return Gson().fromJson<List<StackedOrderRecord>>(json, type) ?: emptyList()
+    }
+
+    fun saveStackedOrders(orders: List<StackedOrderRecord>) {
+        val json = Gson().toJson(orders)
+        preferences.edit(commit = true) { putString(STACKED_ORDERS_KEY, json) }
+    }
+
     fun isAutoAddMode(): Boolean = preferences.getBoolean(AUTO_ADD_KEY, true)
 
     fun operatorName(): String {
@@ -150,5 +180,9 @@ class SessionStore(context: Context) {
         private const val LAST_ACTIVE_AT_KEY = "scanner_last_active_at"
         private const val IDLE_EXPIRES_AT_KEY = "scanner_idle_expires_at"
         private const val POS_DRAFTS_KEY = "pos_saved_drafts"
+        private const val STAFF_TOKEN_KEY = "staff_auth_token"
+        private const val STAFF_USERNAME_KEY = "staff_username"
+        private const val IS_ON_WORK_KEY = "staff_is_on_work"
+        private const val STACKED_ORDERS_KEY = "stacked_orders_queue"
     }
 }
