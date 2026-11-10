@@ -56,7 +56,41 @@ interface BhumiveraService {
     // ==========================================
 
     @GET("inventory-software/scanner/ping")
-    suspend fun scannerPing(@Query("scannerApiKey") apiKey: String? = null): ApiEnvelope<Map<String, Any>>
+    suspend fun scannerPing(
+        @Query("scannerApiKey") apiKey: String? = null,
+        @Query("sessionCode") sessionCode: String? = null,
+        @Query("resume") resume: Boolean = true
+    ): ApiEnvelope<Map<String, Any>>
+
+    @POST("inventory-software/scanner/connect")
+    suspend fun scannerConnect(@Body request: ScannerConnectRequest): ScannerConnectResponse
+
+    @POST("inventory-software/scanner/reconnect")
+    suspend fun scannerReconnect(@Body request: ScannerConnectRequest): ScannerConnectResponse
+
+    @POST("inventory-software/scanner/disconnect")
+    suspend fun scannerDisconnect(@Body request: ScannerConnectRequest): ApiEnvelope<Map<String, Any>>
+
+    @POST("inventory-software/orders/claim")
+    suspend fun claimOrder(@Body request: ClaimOrderRequest): ClaimOrderResponse
+
+    @GET("inventory-software/pos/drafts")
+    suspend fun getPosDrafts(
+        @Query("sessionCode") sessionCode: String? = null,
+        @Query("all") all: String = "true"
+    ): PosDraftsListResponse
+
+    @POST("inventory-software/pos/drafts")
+    suspend fun saveOrPausePosDraft(@Body request: SavePosDraftApiRequest): SavePosDraftApiResponse
+
+    @POST("inventory-software/pos/drafts/{draftId}/resume")
+    suspend fun resumePosDraftApi(
+        @Path("draftId") draftId: String,
+        @Body request: ScannerConnectRequest
+    ): SavePosDraftApiResponse
+
+    @DELETE("inventory-software/pos/drafts/{draftId}")
+    suspend fun deletePosDraftApi(@Path("draftId") draftId: String): PosDraftsListResponse
 
     @GET("inventory-software/scanner/catalog")
     suspend fun scannerCatalog(@Query("scannerApiKey") apiKey: String? = null): ScannerCatalogResponse

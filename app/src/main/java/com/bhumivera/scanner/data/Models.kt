@@ -181,6 +181,75 @@ data class PosDraftOrder(
     val paymentMode: String,
     val items: List<PosBillItem>,
     val savedAt: Long,
+    val orderId: String = "",
+    val status: String = "draft",
+    val createdByName: String = "Staff",
+)
+
+data class ScannerConnectRequest(
+    val sessionCode: String = "",
+    val operatorName: String = "Akash",
+    val deviceName: String = "Bombera Android QR Scanner",
+    val resume: Boolean = true,
+    val scannerApiKey: String? = null,
+)
+
+data class ScannerConnectResponse(
+    val success: Boolean = false,
+    val connected: Boolean = false,
+    val resumed: Boolean = false,
+    val sessionCode: String? = null,
+    val idleTimeoutMinutes: Int = 10,
+    val idleTimeoutSeconds: Int = 600,
+    val idleExpiresAt: String? = null,
+    val message: String? = null,
+    val queue: List<ScannerQueueItem> = emptyList(),
+    val drafts: List<PosDraftOrder> = emptyList(),
+)
+
+data class SavePosDraftApiRequest(
+    val id: String? = null,
+    val sessionCode: String = "",
+    val orderId: String = "",
+    val title: String? = null,
+    val status: String = "draft",
+    val customerName: String = "Walk-in Retail Shopper",
+    val customerPhone: String = "",
+    val paymentMode: String = "UPI",
+    val items: List<PosBillItem> = emptyList(),
+    val operatorName: String = "Akash",
+    val savedAt: Long = System.currentTimeMillis(),
+    val scannerApiKey: String? = null,
+)
+
+data class SavePosDraftApiResponse(
+    val success: Boolean = false,
+    val message: String? = null,
+    val draft: PosDraftOrder? = null,
+    val drafts: List<PosDraftOrder> = emptyList(),
+)
+
+data class PosDraftsListResponse(
+    val success: Boolean = false,
+    val count: Int = 0,
+    val drafts: List<PosDraftOrder> = emptyList(),
+    val message: String? = null,
+)
+
+data class ClaimOrderRequest(
+    val orderId: String,
+    val sessionCode: String = "",
+    val operatorName: String = "Akash",
+    val lockType: String = "BILLING",
+    val scannerApiKey: String? = null,
+)
+
+data class ClaimOrderResponse(
+    val success: Boolean = false,
+    val code: String? = null,
+    val lockedBy: String? = null,
+    val orderId: String? = null,
+    val message: String? = null,
 )
 
 data class PosCustomer(
@@ -193,6 +262,9 @@ data class PosCheckoutRequest(
     val customer: PosCustomer,
     val items: List<Map<String, Any>>,
     val sessionCode: String = "",
+    val orderId: String = "",
+    val draftId: String = "",
+    val operatorName: String = "Akash",
     val extraCharges: List<Map<String, Any>> = emptyList(),
     val discount: Double = 0.0,
     val taxRate: Double = 0.0,

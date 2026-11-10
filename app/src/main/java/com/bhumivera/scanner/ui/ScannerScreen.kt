@@ -79,7 +79,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.bhumivera.scanner.data.BhumiveraService
+import com.bhumivera.scanner.data.ClaimOrderRequest
 import com.bhumivera.scanner.data.PosBillItem
+import com.bhumivera.scanner.data.SavePosDraftApiRequest
+import com.bhumivera.scanner.data.ScannerConnectRequest
 import com.bhumivera.scanner.data.PosCheckoutRequest
 import com.bhumivera.scanner.data.PosCustomer
 import com.bhumivera.scanner.data.PosDraftOrder
@@ -140,8 +143,12 @@ fun ScannerScreen(
     // Navigation Tab: 0 = Scanner Viewfinder, 1 = Active E-Bill POS
     var selectedTab by remember { mutableIntStateOf(0) }
     var isPaired by remember { mutableStateOf(sessionStore.isPaired()) }
+    // Starts offline on app launch until user scans pairing QR or taps Connect/Resume (zero idle SQL/RAM usage)
+    var isSessionActive by remember { mutableStateOf(false) }
+    var isIdlePaused by remember { mutableStateOf(false) }
+    var idleSecondsLeft by remember { mutableIntStateOf(600) }
     var isApiConnected by remember { mutableStateOf(false) }
-    var connectionNotice by remember { mutableStateOf<String?>(null) }
+    var connectionNotice by remember { mutableStateOf<String?>("Offline · Tap Connect/Resume or scan station QR to connect.") }
 
     // 10x Intelligent In-Memory Catalog Cache
     val localCatalog = remember { mutableStateListOf<ScannerProduct>() }
@@ -180,6 +187,9 @@ fun ScannerScreen(
     val posDrafts = remember { mutableStateListOf<PosDraftOrder>() }
     var draftStorageError by remember { mutableStateOf<String?>(null) }
     var activeDraftId by remember { mutableStateOf<String?>(null) }
+    var posOrderId by remember { mutableStateOf("") }
+    var orderLockNotice by remember { mutableStateOf<String?>(null) }
+    var orderLockConflict by remember { mutableStateOf<String?>(null) }
     var hasLocalCartEdits by remember { mutableStateOf(false) }
     var customerName by remember { mutableStateOf("Walk-in Retail Shopper") }
     var customerPhone by remember { mutableStateOf("") }
@@ -221,18 +231,83 @@ fun ScannerScreen(
         }
     }
 
-    LaunchedEffect(isPaired, sessionStore.scannerApiKey()) {
-        if (!isPaired) {
+    fun touchScannerActivity() {
+        sessionStore.recordActivity()
+        idleSecondsLeft = 600
+        isIdlePaused = false
+        if (isPaired) isSessionActive = true
+    }
+
+    fun connectOrResumeSession() {
+        if (!sessionStore.isPaired()) {
+            connectionNotice = "Scan the Station Pairing QR code in Inventory Software to pair first."
+            statusMessage = "Scan Pairing QR to connect"
+            return
+        }
+        isPaired = true
+        touchScannerActivity()
+        scope.launch {
+            try {
+                val recon = service.scannerReconnect(
+                    ScannerConnectRequest(
+                        sessionCode = sessionStore.sessionCode(),
+                        operatorName = sessionStore.operatorName(),
+                        resume = true,
+                        scannerApiKey = sessionStore.scannerApiKey()
+                    )
+                )
+                isApiConnected = recon.connected || recon.success
+                isSessionActive = true
+                isIdlePaused = false
+                connectionNotice = null
+                if (recon.drafts.isNotEmpty()) {
+                    posDrafts.clear()
+                    posDrafts.addAll(recon.drafts)
+                    sessionStore.savePosDrafts(posDrafts.toList())
+                }
+                statusMessage = "🟢 Connected (${sessionStore.sessionCode()}) • Resumed saved state"
+            } catch (e: Exception) {
+                isApiConnected = false
+                connectionNotice = apiFailureMessage(e) ?: "Could not connect: ${e.message ?: "network error"}"
+            }
+        }
+    }
+
+    // 10-Minute Idle Auto-Termination Countdown Loop (Stops all API/SQL calls when idle for 10m!)
+    LaunchedEffect(isSessionActive) {
+        if (!isSessionActive) return@LaunchedEffect
+        while (isSessionActive) {
+            val rem = sessionStore.idleSecondsRemaining()
+            idleSecondsLeft = rem
+            if (rem <= 0) {
+                isSessionActive = false
+                isApiConnected = false
+                isIdlePaused = true
+                connectionNotice = "⏸️ Paused after 10m of inactivity (saving SQL & RAM). Tap Resume to continue from this exact spot."
+                statusMessage = "⏸️ Connection paused (10m idle) • Cart & drafts preserved"
+                try {
+                    service.scannerDisconnect(
+                        ScannerConnectRequest(
+                            sessionCode = sessionStore.sessionCode(),
+                            operatorName = sessionStore.operatorName(),
+                            scannerApiKey = sessionStore.scannerApiKey()
+                        )
+                    )
+                } catch (_: Exception) {}
+                break
+            }
+            delay(1000)
+        }
+    }
+
+    LaunchedEffect(isPaired, isSessionActive, sessionStore.scannerApiKey()) {
+        if (!isPaired || !isSessionActive) {
             isApiConnected = false
-            statusMessage = "Pair this device with the POS station to start."
             return@LaunchedEffect
         }
         isCatalogLoading = true
         try {
             val response = service.scannerCatalog(sessionStore.scannerApiKey())
-            if (!response.success) {
-                throw IllegalStateException("The server did not confirm catalog sync.")
-            }
             if (response.success && response.items.isNotEmpty()) {
                 localCatalog.clear()
                 localCatalog.addAll(response.items)
@@ -240,7 +315,13 @@ fun ScannerScreen(
                 localLookupMap.putAll(response.lookupMap)
                 indexProductsIntoMap(response.items, localLookupMap)
                 isCatalogSynced = true
-                statusMessage = "10x Turbo Ready • ${response.items.size} Formulations Cached"
+                statusMessage = "10x Ready • ${response.items.size} Formulations • 10m Idle Auto-Sleep"
+            }
+            val draftsRes = runCatching { service.getPosDrafts(sessionStore.sessionCode()) }.getOrNull()
+            if (draftsRes?.success == true && draftsRes.drafts.isNotEmpty()) {
+                posDrafts.clear()
+                posDrafts.addAll(draftsRes.drafts)
+                sessionStore.savePosDrafts(posDrafts.toList())
             }
             isApiConnected = true
             connectionNotice = null
@@ -252,10 +333,10 @@ fun ScannerScreen(
         }
     }
 
-    // Keep the paired desktop queue visible without replacing an in-progress or saved mobile bill.
-    LaunchedEffect(isPaired, sessionStore.sessionCode(), sessionStore.scannerApiKey()) {
-        if (!isPaired) return@LaunchedEffect
-        while (true) {
+    // Poll desktop queue ONLY while session is actively connected (stops immediately when idle-paused)
+    LaunchedEffect(isPaired, isSessionActive, sessionStore.sessionCode(), sessionStore.scannerApiKey()) {
+        if (!isPaired || !isSessionActive) return@LaunchedEffect
+        while (isSessionActive) {
             try {
                 val qRes = service.scannerQueue(
                     sessionCode = sessionStore.sessionCode(),
@@ -290,21 +371,28 @@ fun ScannerScreen(
                             )
                         }
                     }
-                } else {
-                    throw IllegalStateException(qRes.message ?: "The server did not confirm POS queue sync.")
                 }
             } catch (e: Exception) {
-                isApiConnected = false
-                connectionNotice = apiFailureMessage(e) ?: "POS connection lost: ${e.message ?: "network error"}"
+                val msg = apiFailureMessage(e) ?: e.message ?: "network error"
+                if (msg.contains("10 minutes", ignoreCase = true) || (e as? retrofit2.HttpException)?.code() == 408) {
+                    isSessionActive = false
+                    isApiConnected = false
+                    isIdlePaused = true
+                    connectionNotice = "⏸️ Connection paused after 10m inactivity. Tap Resume to continue from this exact spot."
+                } else {
+                    isApiConnected = false
+                    connectionNotice = "POS connection paused: $msg"
+                }
                 if (sessionStore.isSessionExpired()) isPaired = false
             }
-            delay(2000)
+            delay(3000)
         }
     }
 
     fun ensurePaired(): Boolean {
         if (sessionStore.isPaired()) {
             isPaired = true
+            touchScannerActivity()
             return true
         }
         isPaired = false
@@ -398,8 +486,8 @@ fun ScannerScreen(
             } catch (_: Exception) {}
         }
         var candidateSku = extractedCode
-        if (candidateSku.startsWith("BV:")) {
-            val parts = candidateSku.split(":")
+        if (candidateSku.startsWith("BV-QR:", ignoreCase = true) || candidateSku.startsWith("BV:", ignoreCase = true)) {
+            val parts = candidateSku.split(":", "|")
             if (parts.size >= 2) {
                 candidateSku = parts[1].trim()
             }
@@ -564,12 +652,22 @@ fun ScannerScreen(
                 } else {
                     null
                 }
+                val opName = json.optString("operatorName")
+                if (opName.isNotBlank()) {
+                    sessionStore.saveOperatorName(opName)
+                }
                 sessionStore.saveExpiresAt(parsedExpiry ?: pairedAt + SessionStore.TWELVE_HOURS_MILLIS)
+                touchScannerActivity()
                 isPaired = sessionStore.isPaired()
+                isSessionActive = true
                 connectionNotice = "Pairing saved. Connecting to POS station ${sessionStore.sessionCode()}..."
                 scope.launch {
                     try {
-                        val ping = BhumiveraService.create(sessionStore).scannerPing(sessionStore.scannerApiKey())
+                        val ping = BhumiveraService.create(sessionStore).scannerPing(
+                            apiKey = sessionStore.scannerApiKey(),
+                            sessionCode = sessionStore.sessionCode(),
+                            resume = true
+                        )
                         if (ping.success != true) {
                             throw IllegalStateException(ping.message ?: "The scanner API did not confirm the connection.")
                         }
@@ -762,25 +860,31 @@ fun ScannerScreen(
         }
     }
 
-    fun saveCurrentDraft() {
+    fun saveOrPauseBill(mode: String = "draft") {
         if (posCart.isEmpty()) {
-            statusMessage = "Scan products before saving a POS draft."
+            statusMessage = "Scan products before saving or pausing a POS bill."
             return
         }
+        touchScannerActivity()
         val savedAt = System.currentTimeMillis()
-        val title = if (customerName.isBlank() || customerName == "Walk-in Retail Shopper") {
-            "Walk-in · ${SimpleDateFormat("dd MMM, HH:mm", Locale.getDefault()).format(Date(savedAt))}"
-        } else {
-            customerName.trim()
+        val cleanOrd = posOrderId.trim()
+        val title = when {
+            cleanOrd.isNotBlank() -> "Order #$cleanOrd · ${customerName.ifBlank { "Walk-in" }}"
+            customerName.isBlank() || customerName == "Walk-in Retail Shopper" ->
+                "Walk-in · ${SimpleDateFormat("dd MMM, HH:mm", Locale.getDefault()).format(Date(savedAt))}"
+            else -> customerName.trim()
         }
         val draft = PosDraftOrder(
-            id = activeDraftId ?: UUID.randomUUID().toString(),
+            id = activeDraftId ?: "DRAFT-${UUID.randomUUID().toString().take(8).uppercase()}",
             title = title,
             customerName = customerName,
             customerPhone = customerPhone,
             paymentMode = paymentMode,
             items = posCart.toList(),
             savedAt = savedAt,
+            orderId = cleanOrd,
+            status = mode,
+            createdByName = sessionStore.operatorName(),
         )
         val existingIndex = posDrafts.indexOfFirst { it.id == draft.id }
         if (existingIndex >= 0) posDrafts.removeAt(existingIndex)
@@ -788,25 +892,101 @@ fun ScannerScreen(
         while (posDrafts.size > 30) posDrafts.removeAt(posDrafts.lastIndex)
         try {
             sessionStore.savePosDrafts(posDrafts.toList())
-            activeDraftId = draft.id
-            hasLocalCartEdits = true
             draftStorageError = null
-            statusMessage = "Draft saved securely on this device. Resume it from Drafts."
         } catch (e: Exception) {
-            draftStorageError = "Could not save this draft: ${e.message ?: "storage error"}"
+            draftStorageError = "Could not save locally: ${e.message ?: "storage error"}"
+        }
+
+        // Sync 2-way with Inventory Software Backend API
+        scope.launch {
+            try {
+                val apiRes = service.saveOrPausePosDraft(
+                    SavePosDraftApiRequest(
+                        id = draft.id,
+                        sessionCode = sessionStore.sessionCode(),
+                        orderId = cleanOrd,
+                        title = draft.title,
+                        status = mode,
+                        customerName = customerName,
+                        customerPhone = customerPhone,
+                        paymentMode = paymentMode,
+                        items = draft.items,
+                        operatorName = sessionStore.operatorName(),
+                        savedAt = savedAt,
+                        scannerApiKey = sessionStore.scannerApiKey()
+                    )
+                )
+                if (apiRes.success && apiRes.drafts.isNotEmpty()) {
+                    posDrafts.clear()
+                    posDrafts.addAll(apiRes.drafts)
+                    sessionStore.savePosDrafts(posDrafts.toList())
+                }
+                if (mode == "paused") {
+                    posCart.clear()
+                    activeDraftId = null
+                    posOrderId = ""
+                    orderLockNotice = null
+                    orderLockConflict = null
+                    hasLocalCartEdits = false
+                    statusMessage = "⏸️ Bill paused & synced to Inventory Software! Resume anytime."
+                } else {
+                    activeDraftId = draft.id
+                    hasLocalCartEdits = true
+                    statusMessage = "💾 Draft saved & synced to Inventory Software API!"
+                }
+            } catch (e: Exception) {
+                val errMsg = apiFailureMessage(e) ?: e.message ?: "network error"
+                if ((e as? retrofit2.HttpException)?.code() == 409) {
+                    orderLockConflict = errMsg
+                }
+                statusMessage = if (mode == "paused") "Paused locally ($errMsg)" else "Draft saved locally ($errMsg)"
+            }
         }
     }
 
     fun resumePosDraft(draft: PosDraftOrder) {
-        posCart.clear()
-        posCart.addAll(draft.items)
-        customerName = draft.customerName
-        customerPhone = draft.customerPhone
-        paymentMode = draft.paymentMode
-        activeDraftId = draft.id
-        hasLocalCartEdits = true
-        selectedTab = 3
-        statusMessage = "Draft restored: ${draft.title}"
+        touchScannerActivity()
+        scope.launch {
+            try {
+                val res = service.resumePosDraftApi(
+                    draftId = draft.id,
+                    request = ScannerConnectRequest(
+                        sessionCode = sessionStore.sessionCode(),
+                        operatorName = sessionStore.operatorName(),
+                        scannerApiKey = sessionStore.scannerApiKey()
+                    )
+                )
+                val target = res.draft ?: draft
+                posCart.clear()
+                posCart.addAll(target.items)
+                customerName = target.customerName
+                customerPhone = target.customerPhone
+                paymentMode = target.paymentMode
+                posOrderId = target.orderId
+                activeDraftId = target.id
+                hasLocalCartEdits = true
+                selectedTab = 3
+                statusMessage = "▶ Resumed bill: ${target.title}"
+            } catch (e: Exception) {
+                val errMsg = apiFailureMessage(e) ?: e.message ?: "network error"
+                if ((e as? retrofit2.HttpException)?.code() == 409) {
+                    draftStorageError = errMsg
+                    statusMessage = errMsg
+                    triggerMismatchAlarmAndHaptic(context)
+                    return@launch
+                }
+                posCart.clear()
+                posCart.addAll(draft.items)
+                customerName = draft.customerName
+                customerPhone = draft.customerPhone
+                paymentMode = draft.paymentMode
+                posOrderId = draft.orderId
+                activeDraftId = draft.id
+                hasLocalCartEdits = true
+                selectedTab = 3
+                statusMessage = "Draft restored locally: ${draft.title}"
+            }
+        }
     }
 
     fun deletePosDraft(draft: PosDraftOrder) {
@@ -817,6 +997,9 @@ fun ScannerScreen(
             draftStorageError = null
         } catch (e: Exception) {
             draftStorageError = "Could not delete the saved draft: ${e.message ?: "storage error"}"
+        }
+        scope.launch {
+            runCatching { service.deletePosDraftApi(draft.id) }
         }
     }
 
@@ -855,8 +1038,9 @@ fun ScannerScreen(
                                     text = when {
                                         !sessionStore.isPaired() -> "Not paired"
                                         sessionStore.isSessionExpired() -> "Session expired"
-                                        !isApiConnected -> "API offline"
-                                        else -> "${sessionStore.hoursRemaining()}h • Online"
+                                        isIdlePaused -> "Paused (10m idle)"
+                                        !isSessionActive || !isApiConnected -> "Offline (Tap Connect)"
+                                        else -> "${idleSecondsLeft / 60}m:${String.format("%02d", idleSecondsLeft % 60)} • Online"
                                     },
                                     color = if (sessionStore.isSessionExpired() || !sessionStore.isPaired() || !isApiConnected) Color(0xFFFCA5A5) else Color(0xFF5EEAD4),
                                     fontSize = 9.sp,
@@ -1958,12 +2142,23 @@ fun ScannerScreen(
                             Text("Connected terminal · ${sessionStore.sessionCode()}", color = Color.Gray, fontSize = 10.sp)
                         }
                         if (posCart.isNotEmpty()) {
-                            OutlinedButton(
-                                onClick = { saveCurrentDraft() },
-                                border = androidx.compose.foundation.BorderStroke(1.dp, GoldAccent),
-                                colors = ButtonDefaults.outlinedButtonColors(contentColor = GoldAccent),
-                            ) {
-                                Text(if (activeDraftId == null) "Save draft" else "Update draft", fontSize = 11.sp)
+                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                OutlinedButton(
+                                    onClick = { saveOrPauseBill("paused") },
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, MintGreen),
+                                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MintGreen),
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                                ) {
+                                    Text("⏸ Pause Bill", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                }
+                                OutlinedButton(
+                                    onClick = { saveOrPauseBill("draft") },
+                                    border = androidx.compose.foundation.BorderStroke(1.dp, GoldAccent),
+                                    colors = ButtonDefaults.outlinedButtonColors(contentColor = GoldAccent),
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                                ) {
+                                    Text(if (activeDraftId == null) "💾 Save Draft" else "💾 Update", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                }
                             }
                         }
                     }
@@ -2006,14 +2201,73 @@ fun ScannerScreen(
                             }
                         }
                     } else {
-                        // Customer Details
+                        // Customer & Multi-Staff Order ID Lock Details
                         Card(
                             modifier = Modifier.fillMaxWidth(),
                             colors = CardDefaults.cardColors(containerColor = CardEmerald),
                             shape = RoundedCornerShape(12.dp)
                         ) {
                             Column(modifier = Modifier.padding(12.dp)) {
-                                Text("CUSTOMER RECIPIENT", color = Color.Gray, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    OutlinedTextField(
+                                        value = posOrderId,
+                                        onValueChange = {
+                                            posOrderId = it
+                                            orderLockConflict = null
+                                        },
+                                        label = { Text("Order ID (e.g. 1234) — Anti-Duplicate Lock", fontSize = 10.sp) },
+                                        modifier = Modifier.weight(1f),
+                                        singleLine = true,
+                                        colors = OutlinedTextFieldDefaults.colors(
+                                            focusedTextColor = Color.White,
+                                            unfocusedTextColor = Color.White,
+                                            focusedBorderColor = GoldAccent
+                                        )
+                                    )
+                                    if (posOrderId.isNotBlank()) {
+                                        Button(
+                                            onClick = {
+                                                touchScannerActivity()
+                                                scope.launch {
+                                                    try {
+                                                        val claim = service.claimOrder(
+                                                            ClaimOrderRequest(
+                                                                orderId = posOrderId.trim(),
+                                                                sessionCode = sessionStore.sessionCode(),
+                                                                operatorName = sessionStore.operatorName(),
+                                                                scannerApiKey = sessionStore.scannerApiKey()
+                                                            )
+                                                        )
+                                                        if (claim.success) {
+                                                            orderLockConflict = null
+                                                            orderLockNotice = "🔒 Order #${posOrderId.trim()} locked for ${sessionStore.operatorName()}"
+                                                            triggerBeepAndHaptic(context)
+                                                        }
+                                                    } catch (e: Exception) {
+                                                        orderLockNotice = null
+                                                        orderLockConflict = apiFailureMessage(e) ?: "Order #${posOrderId.trim()} is locked by another staff member!"
+                                                        triggerMismatchAlarmAndHaptic(context)
+                                                    }
+                                                }
+                                            },
+                                            colors = ButtonDefaults.buttonColors(containerColor = GoldAccent)
+                                        ) {
+                                            Text("Lock", color = DeepEmerald, fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                                        }
+                                    }
+                                }
+                                orderLockConflict?.let {
+                                    Text(it, color = Color(0xFFFCA5A5), fontSize = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 4.dp))
+                                }
+                                orderLockNotice?.let {
+                                    Text(it, color = MintGreen, fontSize = 11.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 4.dp))
+                                }
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Text("CUSTOMER RECIPIENT (STAFF: ${sessionStore.operatorName().uppercase()})", color = Color.Gray, fontSize = 10.sp, fontWeight = FontWeight.Bold)
                                 Spacer(modifier = Modifier.height(6.dp))
                                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                     OutlinedTextField(
@@ -2312,6 +2566,7 @@ fun ScannerScreen(
                                                 "gstHsnCode" to it.gstHsnCode
                                             )
                                         }
+                                        touchScannerActivity()
                                         val checkoutReq = PosCheckoutRequest(
                                             customer = PosCustomer(
                                                 name = customerName.ifBlank { "Walk-in Retail Shopper" },
@@ -2320,6 +2575,9 @@ fun ScannerScreen(
                                             ),
                                             items = itemsList,
                                             sessionCode = sessionStore.sessionCode(),
+                                            orderId = posOrderId.trim(),
+                                            draftId = activeDraftId.orEmpty(),
+                                            operatorName = sessionStore.operatorName(),
                                             taxRate = 0.0,
                                             paidAmount = grandTotal,
                                             paymentMode = paymentMode,
@@ -2403,11 +2661,18 @@ fun ScannerScreen(
                                 maxLines = 2,
                                 overflow = TextOverflow.Ellipsis,
                             )
-                            TextButton(onClick = {
-                                selectedTab = 0
-                                statusMessage = "Point the camera at the POS station pairing QR."
-                            }) {
-                                Text("Pair", color = GoldAccent, fontWeight = FontWeight.Bold)
+                            Row {
+                                if (sessionStore.isPaired()) {
+                                    TextButton(onClick = { connectOrResumeSession() }) {
+                                        Text("Resume", color = MintGreen, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                                TextButton(onClick = {
+                                    selectedTab = 0
+                                    statusMessage = "Point the camera at the POS station pairing QR."
+                                }) {
+                                    Text("Scan QR", color = GoldAccent, fontWeight = FontWeight.Bold)
+                                }
                             }
                         }
                     }
@@ -2728,8 +2993,9 @@ private fun resolveFromLocalCache(
     var candidate = clean.lowercase()
     var parsedBatch: String? = null
 
-    // Check Bhumivera Batch QR: BV:<SKU>:<BATCH> or BV|<SKU>|<BATCH>
-    if (clean.startsWith("BV:", ignoreCase = true) || clean.startsWith("BV|", ignoreCase = true)) {
+    // Check Bhumivera Standalone Product QR (BV-QR:<SKU>) or Batch QR (BV:<SKU>:<BATCH>)
+    if (clean.startsWith("BV-QR:", ignoreCase = true) || clean.startsWith("BV-QR|", ignoreCase = true) ||
+        clean.startsWith("BV:", ignoreCase = true) || clean.startsWith("BV|", ignoreCase = true)) {
         val parts = clean.split(":", "|").map { it.trim() }
         if (parts.size >= 2) {
             candidate = parts[1].lowercase()

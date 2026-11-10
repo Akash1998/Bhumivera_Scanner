@@ -50,7 +50,43 @@ class SessionStore(context: Context) {
         preferences.edit(commit = true) { putString(SESSION_CODE_KEY, code.trim()) }
     }
 
-    fun isAutoAddMode(): Boolean = preferences.getBoolean(AUTO_ADD_KEY, false)
+    fun isAutoAddMode(): Boolean = preferences.getBoolean(AUTO_ADD_KEY, true)
+
+    fun operatorName(): String {
+        val stored = preferences.getString(OPERATOR_NAME_KEY, null)
+        return if (!stored.isNullOrBlank()) stored else "Akash"
+    }
+
+    fun saveOperatorName(name: String) {
+        preferences.edit(commit = true) { putString(OPERATOR_NAME_KEY, name.trim()) }
+    }
+
+    fun lastActiveAt(): Long = preferences.getLong(LAST_ACTIVE_AT_KEY, 0L)
+
+    fun recordActivity(now: Long = System.currentTimeMillis()) {
+        preferences.edit(commit = true) {
+            putLong(LAST_ACTIVE_AT_KEY, now)
+            putLong(IDLE_EXPIRES_AT_KEY, now + TEN_MINUTES_MILLIS)
+        }
+    }
+
+    fun idleExpiresAt(): Long {
+        val stored = preferences.getLong(IDLE_EXPIRES_AT_KEY, 0L)
+        if (stored > 0L) return stored
+        val last = lastActiveAt()
+        return if (last > 0L) last + TEN_MINUTES_MILLIS else 0L
+    }
+
+    fun isIdleExpired(now: Long = System.currentTimeMillis()): Boolean {
+        val exp = idleExpiresAt()
+        return exp > 0L && now >= exp
+    }
+
+    fun idleSecondsRemaining(now: Long = System.currentTimeMillis()): Int {
+        val exp = idleExpiresAt()
+        if (exp <= now) return 0
+        return ((exp - now) / 1000L).toInt()
+    }
 
     fun setAutoAddMode(enabled: Boolean) {
         preferences.edit(commit = true) { putBoolean(AUTO_ADD_KEY, enabled) }
@@ -102,13 +138,17 @@ class SessionStore(context: Context) {
 
     companion object {
         const val TWELVE_HOURS_MILLIS = 12L * 60 * 60 * 1000L
+        const val TEN_MINUTES_MILLIS = 10L * 60 * 1000L
         private const val TOKEN_KEY = "customer_token"
         private const val SCANNER_KEY = "scanner_api_key"
         private const val BACKEND_URL_KEY = "scanner_backend_url"
         private const val SESSION_CODE_KEY = "scanner_session_code"
+        private const val OPERATOR_NAME_KEY = "scanner_operator_name"
         private const val AUTO_ADD_KEY = "scanner_auto_add_mode"
         private const val PAIRED_AT_KEY = "scanner_paired_at"
         private const val EXPIRES_AT_KEY = "scanner_expires_at"
+        private const val LAST_ACTIVE_AT_KEY = "scanner_last_active_at"
+        private const val IDLE_EXPIRES_AT_KEY = "scanner_idle_expires_at"
         private const val POS_DRAFTS_KEY = "pos_saved_drafts"
     }
 }

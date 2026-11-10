@@ -7,23 +7,27 @@ import org.junit.Test
 
 class ScannerWorkflowContractTest {
     @Test
-    fun posCheckoutIncludesThePairedTerminalSession() {
+    fun posCheckoutIncludesPairedTerminalSessionAndOrderLock() {
         val request = PosCheckoutRequest(
             customer = PosCustomer(),
             items = listOf(mapOf("productId" to 12, "quantity" to 2)),
-            sessionCode = "POS-ASN-01",
+            sessionCode = "STAFF-AKASH",
+            orderId = "1234",
+            operatorName = "Akash",
         )
 
         val serialized = JsonParser.parseString(Gson().toJson(request)).asJsonObject
 
-        assertEquals("POS-ASN-01", serialized.get("sessionCode").asString)
+        assertEquals("STAFF-AKASH", serialized.get("sessionCode").asString)
+        assertEquals("1234", serialized.get("orderId").asString)
+        assertEquals("Akash", serialized.get("operatorName").asString)
     }
 
     @Test
-    fun savedDraftRoundTripsAllBillLines() {
+    fun savedDraftRoundTripsAllBillLinesAndPausedStatus() {
         val draft = PosDraftOrder(
-            id = "draft-1",
-            title = "Walk-in · 15:20",
+            id = "draft-1234",
+            title = "Order #1234 · Walk-in",
             customerName = "Walk-in Retail Shopper",
             customerPhone = "9876543210",
             paymentMode = "UPI",
@@ -40,6 +44,9 @@ class ScannerWorkflowContractTest {
                 ),
             ),
             savedAt = 1_794_045_600_000L,
+            orderId = "1234",
+            status = "paused",
+            createdByName = "Akash",
         )
 
         val restored = Gson().fromJson(Gson().toJson(draft), PosDraftOrder::class.java)
