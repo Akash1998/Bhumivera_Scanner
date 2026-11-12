@@ -106,6 +106,8 @@ data class ScannerProduct(
     val uom: String? = "Pcs",
     @SerializedName("verify_url") val verifyUrl: String? = null,
     @SerializedName("product_url") val productUrl: String? = null,
+    val serialNumber: String? = null,
+    val serialStatus: String? = null,
 ) {
     val displayMetaId: Int get() = metaId ?: metaIdAlt ?: (productId ?: productIdAlt ?: 0)
     val displayProductId: Int get() = productId ?: productIdAlt ?: 0
@@ -167,6 +169,7 @@ data class PosBillItem(
     val binCode: String = "ASN-SHOP-R1-B01",
     val batchNo: String = "BV-BATCH-2026",
     val availableStock: Int = 0,
+    val serialNumbers: List<String> = emptyList(),
 ) {
     val lineSubtotal: Double get() = price * quantity
     val lineTaxAmount: Double get() = 0.0
@@ -288,11 +291,30 @@ data class PosSaleRecord(
     val subTotal: Double = 0.0,
     val tax: Double = 0.0,
     val taxRate: Double = 0.0,
+    val taxableAmount: Double = 0.0,
+    val discount: Double = 0.0,
+    val extraTotal: Double = 0.0,
     val billTotal: Double = 0.0,
     val paid: Double = 0.0,
     val paymentMode: String = "Cash",
     val cashier: String = "scanner",
     val cust: PosCustomer? = null,
+    val items: List<PosInvoiceLine> = emptyList(),
+    val extra: List<PosInvoiceCharge> = emptyList(),
+)
+
+data class PosInvoiceLine(
+    val name: String = "Product",
+    val sku: String? = null,
+    val q: Int = 1,
+    val p: Double = 0.0,
+    val gstRate: Double = 0.0,
+    val serialNumbers: List<String> = emptyList(),
+)
+
+data class PosInvoiceCharge(
+    val n: String = "Extra charge",
+    val a: Double = 0.0,
 )
 
 data class ScannerQueueResponse(
@@ -308,6 +330,7 @@ data class ScannerQueueItem(
     @SerializedName("product_id") val productId: Int? = null,
     val sku: String = "",
     val barcode: String? = null,
+    @SerializedName("serial_number") val serialNumber: String? = null,
     @SerializedName("product_name") val productName: String = "",
     @SerializedName("unit_price") val unitPrice: Double = 0.0,
     val mrp: Double = 0.0,
@@ -323,6 +346,7 @@ data class ScannerQueueItemRequest(
     val sessionCode: String = "",
     val sku: String? = null,
     val metaId: Int? = null,
+    val serialNumber: String? = null,
     val quantity: Int? = null,
     val delta: Int? = null,
     val price: Double? = null,

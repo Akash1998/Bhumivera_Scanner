@@ -352,15 +352,18 @@ fun ScannerScreen(
                 if (qRes.success) {
                     isApiConnected = true
                     connectionNotice = null
-                    val qItems = qRes.queue
+                    val qItems = qRes.queue.groupBy { it.sku }
                     val differs = qItems.isNotEmpty() &&
-                        (qItems.size != posCart.size || qItems.any { q ->
-                            val local = posCart.find { it.sku == q.sku }
-                            local == null || local.quantity != q.quantity
+                        (qItems.size != posCart.size || qItems.any { (sku, rows) ->
+                            val local = posCart.find { it.sku == sku }
+                            local == null ||
+                                local.quantity != rows.sumOf { it.quantity } ||
+                                local.serialNumbers.orEmpty().toSet() != rows.mapNotNull { it.serialNumber }.toSet()
                         })
                     if (differs && !hasLocalCartEdits && activeDraftId == null) {
                         posCart.clear()
-                        qItems.forEach { q ->
+                        qItems.values.forEach { rows ->
+                            val q = rows.first()
                             posCart.add(
                                 PosBillItem(
                                     id = q.metaId ?: 0,
@@ -368,12 +371,13 @@ fun ScannerScreen(
                                     name = q.productName,
                                     sku = q.sku,
                                     barcode = q.barcode ?: q.sku,
-                                    quantity = q.quantity,
+                                    quantity = rows.sumOf { it.quantity },
                                     price = q.unitPrice,
                                     mrp = q.mrp,
                                     gstRate = 5.0,
                                     gstHsnCode = q.gstHsnCode ?: "30049011",
-                                    availableStock = q.availableStock
+                                    availableStock = q.availableStock,
+                                    serialNumbers = rows.mapNotNull { it.serialNumber }
                                 )
                             )
                         }
@@ -878,6 +882,7 @@ fun ScannerScreen(
                                 sessionCode = sessionStore.sessionCode(),
                                 sku = matched.displaySku,
                                 metaId = matched.displayMetaId,
+                                serialNumber = matched.serialNumber,
                                 delta = 1,
                                 price = matched.displayPrice,
                                 name = matched.name,
@@ -914,6 +919,10 @@ fun ScannerScreen(
                 if (product != null) {
                     triggerBeepAndHaptic(context)
                     indexSingleProduct(product, localLookupMap)
+                    if (product.serialNumber != null && product.serialStatus != "available") {
+                        statusMessage = "This item is ${product.serialStatus ?: "unavailable"} and cannot be sold."
+                        return@launch
+                    }
                     if (sessionStore.isAutoAddMode()) {
                         addItemToPosCart(posCart, product, 1)
                         hasLocalCartEdits = true
@@ -923,6 +932,7 @@ fun ScannerScreen(
                                     sessionCode = sessionStore.sessionCode(),
                                     sku = product.displaySku,
                                     metaId = product.displayMetaId,
+                                    serialNumber = product.serialNumber,
                                     delta = 1,
                                     price = product.displayPrice,
                                     name = product.name,
@@ -1577,10 +1587,11 @@ fun ScannerScreen(
                                     // Add to Active Bill
                                     Button(
                                         onClick = {
-                                            addItemToPosCart(posCart, product, scanQuantity)
+                                            val addQuantity = if (product.serialNumber != null) 1 else scanQuantity
+                                            addItemToPosCart(posCart, product, addQuantity)
                                             hasLocalCartEdits = true
                                             triggerBeepAndHaptic(context)
-                                            statusMessage = "Added ${product.name} (×$scanQuantity) to E-Bill!"
+                                            statusMessage = "Added ${product.name} (×$addQuantity) to E-Bill!"
                                             scope.launch {
                                                 try {
                                                     updateTerminalQueue(
@@ -1588,7 +1599,8 @@ fun ScannerScreen(
                                                             sessionCode = sessionStore.sessionCode(),
                                                             sku = product.displaySku,
                                                             metaId = product.displayMetaId,
-                                                            quantity = scanQuantity,
+                                                            serialNumber = product.serialNumber,
+                                                            quantity = addQuantity,
                                                             price = product.displayPrice,
                                                             name = product.name,
                                                             availableStock = product.displayStock,
@@ -2702,7 +2714,8 @@ fun ScannerScreen(
                                                 "quantity" to it.quantity,
                                                 "q" to it.quantity,
                                                 "gstRate" to it.gstRate,
-                                                "gstHsnCode" to it.gstHsnCode
+                                                "gstHsnCode" to it.gstHsnCode,
+                                                "serialNumbers" to it.serialNumbers.orEmpty()
                                             )
                                         }
                                         touchScannerActivity()
@@ -2845,8 +2858,24 @@ fun ScannerScreen(
                             Text("CUSTOMER: ${invoice.cust?.name ?: customerName} (${invoice.cust?.phone ?: customerPhone})", color = Color.White, fontSize = 11.sp)
                             Text("PAYMENT MODE: ${invoice.paymentMode}", color = GoldAccent, fontSize = 11.sp)
                             HorizontalDivider(modifier = Modifier.padding(vertical = 6.dp), color = Color.Gray.copy(alpha = 0.3f))
-                            Text("NET AMOUNT: ₹${invoice.billTotal.toInt()}", color = MintGreen, fontWeight = FontWeight.ExtraBold, fontSize = 16.sp)
-                            Text("Website stock atomically updated.", color = Color.Gray, fontSize = 10.sp)
+                            invoice.items.forEach { item ->
+                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                    Text("${item.name} × ${item.q}", color = Color.White, fontSize = 11.sp, modifier = Modifier.weight(1f))
+                                    Text(formatInvoiceMoney(item.p * item.q), color = Color.White, fontSize = 11.sp)
+                                }
+                                if (item.serialNumbers.orEmpty().isNotEmpty()) {
+                                    Text("Item QR: ${item.serialNumbers.orEmpty().joinToString()}", color = Color.LightGray, fontSize = 9.sp)
+                                }
+                            }
+                            HorizontalDivider(modifier = Modifier.padding(vertical = 6.dp), color = Color.Gray.copy(alpha = 0.3f))
+                            Text("Subtotal: ${formatInvoiceMoney(invoice.subTotal)}", color = Color.LightGray, fontSize = 10.sp)
+                            invoice.extra.forEach { charge ->
+                                Text("${charge.n}: ${formatInvoiceMoney(charge.a)}", color = Color.LightGray, fontSize = 10.sp)
+                            }
+                            if (invoice.discount > 0) Text("Discount: -${formatInvoiceMoney(invoice.discount)}", color = Color.LightGray, fontSize = 10.sp)
+                            Text("GST (${invoice.taxRate}%): ${formatInvoiceMoney(invoice.tax)}", color = Color.LightGray, fontSize = 10.sp)
+                            Text("TOTAL: ${formatInvoiceMoney(invoice.billTotal)}", color = MintGreen, fontWeight = FontWeight.ExtraBold, fontSize = 16.sp)
+                            Text("Paid: ${formatInvoiceMoney(invoice.paid)} · Balance due: ${formatInvoiceMoney((invoice.billTotal - invoice.paid).coerceAtLeast(0.0))}", color = Color.White, fontSize = 10.sp)
                         }
                     }
 
@@ -3221,6 +3250,7 @@ private fun resolveFromLocalCache(
             val pathSegments = uri.pathSegments
             val prodIdx = pathSegments.indexOfFirst { it == "product" || it == "combo" }
 
+            if (!serialParam.isNullOrBlank()) return null
             if (!skuParam.isNullOrBlank()) {
                 candidate = skuParam.lowercase()
             } else if (prodIdx != -1 && prodIdx + 1 < pathSegments.size) {
@@ -3371,10 +3401,17 @@ private fun seedDefaultLuxuryProducts(
 }
 
 private fun addItemToPosCart(cart: MutableList<PosBillItem>, product: ScannerProduct, quantity: Int) {
+    val serialNumber = product.serialNumber?.trim()?.uppercase()
+    if (serialNumber != null && product.serialStatus != "available") return
     val idx = cart.indexOfFirst { it.id == product.displayMetaId || it.sku == product.displaySku }
     if (idx != -1) {
         val existing = cart[idx]
-        cart[idx] = existing.copy(quantity = existing.quantity + quantity)
+        val existingSerialNumbers = existing.serialNumbers.orEmpty()
+        if (serialNumber != null && serialNumber in existingSerialNumbers) return
+        cart[idx] = existing.copy(
+            quantity = existing.quantity + quantity,
+            serialNumbers = if (serialNumber == null) existingSerialNumbers else existingSerialNumbers + serialNumber
+        )
     } else {
         cart.add(
             PosBillItem(
@@ -3390,7 +3427,8 @@ private fun addItemToPosCart(cart: MutableList<PosBillItem>, product: ScannerPro
                 gstHsnCode = product.displayHsn,
                 binCode = product.displayBin,
                 batchNo = product.displayBatch,
-                availableStock = product.displayStock
+                availableStock = product.displayStock,
+                serialNumbers = listOfNotNull(serialNumber)
             )
         )
     }
@@ -3429,6 +3467,15 @@ private fun triggerBeepAndHaptic(context: Context) {
 }
 
 private fun buildWhatsAppInvoiceText(invoice: PosSaleRecord): String {
+    val itemLines = invoice.items.joinToString("\n") { item ->
+        val serialNumbers = item.serialNumbers.orEmpty()
+        val serialDetails = if (serialNumbers.isEmpty()) "" else
+            "\n  Item codes: ${serialNumbers.joinToString()}" +
+                serialNumbers.joinToString(separator = "") { "\n  Verify: https://www.bhumivera.com/verify?code=$it" }
+        "• ${item.name} (${item.sku ?: "-"}) × ${item.q} @ ${formatInvoiceMoney(item.p)} = ${formatInvoiceMoney(item.p * item.q)}$serialDetails"
+    }
+    val extraLines = invoice.extra.joinToString("\n") { "• ${it.n}: ${formatInvoiceMoney(it.a)}" }
+    val amountDue = (invoice.billTotal - invoice.paid).coerceAtLeast(0.0)
     return """
 🌿 *BHUMIVERA ORGANICS INDIA PRIVATE LIMITED* 🌿
 *The Transparent Maison — 100% Label Disclosed Formulations*
@@ -3438,19 +3485,26 @@ G.T. Road, Asansol, West Bengal - 713304
 *OFFICIAL RETAIL E-BILL RECEIPT*
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
 📄 *Invoice #:* ${invoice.invoiceNo ?: "BV-POS-2026"}
-📅 *Date:* ${invoice.date ?: "03 Nov 2026"}
+📅 *Date:* ${invoice.date ?: "Live Settlement"}
 👤 *Customer:* ${invoice.cust?.name ?: "Walk-in Patron"}
-💳 *Payment:* ${invoice.paymentMode} (Status: Paid)
+💳 *Payment:* ${invoice.paymentMode}
+👤 *Cashier:* ${invoice.cashier}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
-💰 *Subtotal:* ₹${invoice.subTotal.toInt()}
-💎 *TOTAL PAID:* ₹${invoice.billTotal.toInt()} (Tax Included / Nil)
+${itemLines.ifBlank { "No item details returned." }}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
-🔍 *Verify Formulation Authenticity:*
-https://www.bhumivera.com/verify?inv=${invoice.invoiceNo}
+*Subtotal:* ${formatInvoiceMoney(invoice.subTotal)}
+${extraLines.takeIf { it.isNotBlank() }?.let { "$it\n" } ?: ""}${if (invoice.discount > 0) "*Discount:* -${formatInvoiceMoney(invoice.discount)}\n" else ""}*Taxable amount:* ${formatInvoiceMoney(invoice.taxableAmount)}
+*GST (${invoice.taxRate}%):* ${formatInvoiceMoney(invoice.tax)}
+*GRAND TOTAL:* ${formatInvoiceMoney(invoice.billTotal)}
+*Amount received:* ${formatInvoiceMoney(invoice.paid)}
+*Balance due:* ${formatInvoiceMoney(amountDue)}
 
 *Thank you for supporting pure, cold-pressed botanical craftsmanship!*
     """.trimIndent()
 }
+
+private fun formatInvoiceMoney(amount: Double): String =
+    "₹${String.format(java.util.Locale.US, "%.2f", amount)}"
 
 private fun extractSkuOrSlugFallback(clean: String, catalog: List<ScannerProduct>): ScannerProduct? {
     val lower = clean.lowercase()
